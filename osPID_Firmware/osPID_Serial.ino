@@ -783,6 +783,47 @@ static void processSerialCommand()
     aTuneNoise = makeDecimal<1>(i2, d2);
     aTuneLookBack = i1;
     break;
+  case 'B': // set peripheral card parameter
+    {
+      byte decimals;
+
+      if (i3 == 0)
+      {
+        if (!theInputCard.describeSetting(i2, &decimals))
+          goto out_EINV;
+        if (!theInputCard.writeSetting(i2, coerceToDecimal(i1, d1, decimals)))
+          goto out_EINV;
+      }
+      else
+      {
+        if (!theOutputCard.describeSetting(i2, &decimals))
+          goto out_EINV;
+        if (!theOutputCard.writeSetting(i2, coerceToDecimal(i1, d1, decimals)))
+          goto out_EINV;
+      }
+    }
+    break;
+  case 'b': // get peripheral card parameter
+    {
+      byte decimals;
+      int val;
+
+      if (i2 == 0)
+      {
+        if (!theInputCard.describeSetting(i1, &decimals))
+          goto out_EINV;
+        val = theInputCard.readSetting(i1);
+      }
+      else
+      {
+        if (!theOutputCard.describeSetting(i1, &decimals))
+          goto out_EINV;
+        val = theOutputCard.readSetting(i1);
+      }
+
+      serialPrintDecimal(val, decimals);
+    }
+    goto out_OK;
   case 'C': // cancel an auto-tune or profile execution
     if (tuning)
       stopAutoTune();
