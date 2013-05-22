@@ -186,12 +186,12 @@ struct DecimalItem {
 // This must be in the same order as the ITEM_* enumeration
 PROGMEM DecimalItem decimalItemData[DECIMAL_ITEM_COUNT] =
 {
-  { 'S', DecimalItem::RANGE_M9999_P9999 | DecimalItem::ONE_DECIMAL_PLACE, &fakeSetpoint },
+  { 'S', DecimalItem::RANGE_M9999_P9999 | DecimalItem::ONE_DECIMAL_PLACE, &activeSetPoint },
   { 'I', DecimalItem::RANGE_M9999_P9999 | DecimalItem::ONE_DECIMAL_PLACE | DecimalItem::NO_EDIT, &fakeInput },
   { 'O', DecimalItem::RANGE_0_1000 | DecimalItem::ONE_DECIMAL_PLACE | DecimalItem::EDIT_MANUAL_ONLY, &fakeOutput },
-  { 'P', DecimalItem::RANGE_0_32767 | DecimalItem::THREE_DECIMAL_PLACES, &PGain },
-  { 'I', DecimalItem::RANGE_0_32767 | DecimalItem::THREE_DECIMAL_PLACES, &IGain },
-  { 'D', DecimalItem::RANGE_0_32767 | DecimalItem::THREE_DECIMAL_PLACES, &DGain },
+  { 'P', DecimalItem::RANGE_0_32767 | DecimalItem::THREE_DECIMAL_PLACES, &theLoop.PGain },
+  { 'I', DecimalItem::RANGE_0_32767 | DecimalItem::THREE_DECIMAL_PLACES, &theLoop.IGain },
+  { 'D', DecimalItem::RANGE_0_32767 | DecimalItem::THREE_DECIMAL_PLACES, &theLoop.DGain },
   { 'L', DecimalItem::RANGE_M9999_P9999 | DecimalItem::ONE_DECIMAL_PLACE, &lowerTripLimit },
   { 'U', DecimalItem::RANGE_M9999_P9999 | DecimalItem::ONE_DECIMAL_PLACE, &upperTripLimit }
 };
@@ -349,7 +349,7 @@ static bool canEditDecimalItem(const byte index)
   byte flags = decimalItemData[index].flags();
 
   return !(flags & DecimalItem::NO_EDIT) &&
-    !((flags & DecimalItem::EDIT_MANUAL_ONLY) && (modeIndex == 1));
+    !((flags & DecimalItem::EDIT_MANUAL_ONLY) && !manualControl);
 }
 
 static bool canEditItem(byte item)
@@ -448,10 +448,10 @@ static void drawFullRowItem(byte row, bool selected, byte item)
   //case ITEM_SETPOINT3:
   //case ITEM_SETPOINT4: should not happen
   case ITEM_PID_MODE:
-    theLCD.print(modeIndex == MANUAL ? F("ManCtrl") : F("PidLoop"));
+    theLCD.print(manualControl ? F("ManCtrl") : F("PidLoop"));
     break;
   case ITEM_PID_DIRECTION:
-    theLCD.print(ctrlDirection == DIRECT ? F("ActnFwd") : F("ActnRev"));
+    theLCD.print(theLoop.invertAction ? F("ActnRev") : F("ActnFwd"));
     break;
   case ITEM_COMM_9p6k:
     theLCD.print(F(" 9.6kbd"));
@@ -729,15 +729,13 @@ static void updownKeyPress(bool up)
     switch (item)
     {
     case ITEM_PID_MODE:
-      modeIndex = (modeIndex == 0 ? 1 : 0);
+      manualControl = !manualControl;
       // use the manual output value
-      if (modeIndex == MANUAL)
+      if (manualControl)
         output = double(manualOutput);
-      myPID.SetMode(modeIndex);
       break;
     case ITEM_PID_DIRECTION:
-      ctrlDirection = (ctrlDirection == 0 ? 1 : 0);
-      myPID.SetControllerDirection(ctrlDirection);
+      theLoop.invertAction = !theLoop.invertAction;
       break;
     case ITEM_TRIP_ENABLED:
       tripLimitsEnabled = !tripLimitsEnabled;
@@ -777,7 +775,7 @@ static void updownKeyPress(bool up)
   *valPtr = val;
 
   if (item == ITEM_SETPOINT)
-    setPoints[setpointIndex] = fakeSetpoint;
+    setPoints[setpointIndex] = activeSetPoint;
 }
 
 static void okKeyPress()
@@ -885,7 +883,7 @@ static void okKeyPress()
   case ITEM_SETPOINT3:
   case ITEM_SETPOINT4:
     setpointIndex = item - ITEM_SETPOINT1;
-    setpoint = setPoints[setpointIndex];
+    activeSetPoint = setPoints[setpointIndex];
     markSettingsDirty();
 
     // return to the prior menu

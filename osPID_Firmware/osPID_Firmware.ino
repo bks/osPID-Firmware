@@ -2,13 +2,13 @@
 
 #include <LiquidCrystal.h>
 #include <Arduino.h>
-#include "PID_v1_local.h"
 #include "PID_AutoTune_v0_local.h"
 #include "ospAnalogButton.h"
 #include "ospCardSimulator.h"
 #include "ospDecimalValue.h"
 #include "ospDigitalOutputCard.h"
 #include "ospTemperatureInputCard.h"
+#include "ospPIDLoop.h"
 #include "ospProfile.h"
 
 #undef BUGCHECK
@@ -82,18 +82,16 @@ boolean runningProfile = false;
 char controllerName[17] = { 'o', 's', 'P', 'I', 'D', ' ',
        'C', 'o', 'n', 't', 'r', 'o', 'l', 'l', 'e', 'r', '\0' };
 
-// the gain coefficients of the PID controller
-ospDecimalValue<3> PGain = { 2000 }, IGain = { 500 }, DGain = { 2000 };
-
-// the direction flag for the PID controller
-byte ctrlDirection = DIRECT;
+// the PID controller
+ospPIDLoop theLoop = { { 2000 }, { 500 }, { 2000 }, { 0 }, { 0 }, false };
 
 // whether the controller is executing a PID law or just outputting a manual
 // value
-byte modeIndex = MANUAL;
+bool manualControl = true;
 
 // the 4 setpoints we can easily switch between
 ospDecimalValue<1> setPoints[4] = { { 250 }, { 750 }, { 1500 }, { 3000 } };
+ospDecimalValue<1> activeSetPoint = { 250 };
 
 // the manually-commanded output value
 ospDecimalValue<1> manualOutput = { 0 };
@@ -102,10 +100,10 @@ ospDecimalValue<1> manualOutput = { 0 };
 byte setpointIndex = 0;
 
 // temporary values during the fixed-point conversion
-ospDecimalValue<1> fakeSetpoint = { 750 }, fakeInput = { 200 }, fakeOutput = { 0 };
+ospDecimalValue<1> fakeInput = { 200 }, fakeOutput = { 0 };
 
 // the variables to which the PID controller is bound
-double setpoint = 75.0, input = 30.0, output = 0.0, pidInput = 30.0;
+double input = 30.0, output = 0.0, pidInput = 30.0;
 
 // the hard trip limits
 ospDecimalValue<1> lowerTripLimit = { 0 }, upperTripLimit = { 2000 };
@@ -132,24 +130,12 @@ PID_ATune aTune(&pidInput, &output);
 // whether the autotuner is active
 bool tuning = false;
 
-// the actual PID controller
-PID myPID(&pidInput, &output, &setpoint,double(PGain),double(IGain),double(DGain), DIRECT);
-
 // timekeeping to schedule the various tasks in the main loop
-unsigned long now, lcdTime;
-
-
-// how often to step the PID loop, in milliseconds: it is impractical to set this
-// to less than ~250 (i.e. faster than 4 Hz), since (a) the input card has up to 100 ms
-// of latency, and (b) the controller needs time to handle the LCD, EEPROM, and serial
-// I/O
-enum { PID_LOOP_SAMPLE_TIME = 1000 };
+unsigned long now, lcdTime, pidTime;
 
 // initialize the controller: this is called by the Arduino runtime on bootup
 void setup()
 {
-  lcdTime = 25;
-
   // set up the LCD
   theLCD.begin(8, 2);
   drawStartupBanner();
@@ -172,17 +158,10 @@ void setup()
 
   // show the controller name?
 
-  // configure the PID loop
-  myPID.SetSampleTime(PID_LOOP_SAMPLE_TIME);
-  myPID.SetOutputLimits(0, 100);
-  myPID.SetTunings(double(PGain), double(IGain), double(DGain));
-  myPID.SetControllerDirection(ctrlDirection);
-
   if (powerOnBehavior == POWERON_DISABLE) {
-    modeIndex = MANUAL;
+    manualControl = true;
     output = manualOutput;
   }
-  myPID.SetMode(modeIndex);
 
   // finally, check whether we were interrupted in the middle of a profile
   if (profileWasInterrupted())
@@ -196,6 +175,9 @@ void setup()
       recordProfileCompletion(); // we don't want to pick up again, so mark it completed
   }
 
+  now = millis();
+  lcdTime = now + 25;
+  pidTime = now + 5;
   controllerIsBooting = false;
 }
 
@@ -297,30 +279,27 @@ static void checkButtons()
 static void completeAutoTune()
 {
   // We're done, set the tuning parameters
-  PGain = (ospDecimalValue<3>){ (int)(aTune.GetKp() * 1000.0) };
-  IGain = (ospDecimalValue<3>){ (int)(aTune.GetKi() * 1000.0) };
-  DGain = (ospDecimalValue<3>){ (int)(aTune.GetKd() * 1000.0) };
-
-  // set the PID controller to accept the new gain settings
-  myPID.SetControllerDirection(DIRECT);
-  myPID.SetMode(AUTOMATIC);
+  ospDecimalValue<3> PGain = (ospDecimalValue<3>){ (int)(aTune.GetKp() * 1000.0) };
+  ospDecimalValue<3> IGain = (ospDecimalValue<3>){ (int)(aTune.GetKi() * 1000.0) };
+  ospDecimalValue<3> DGain = (ospDecimalValue<3>){ (int)(aTune.GetKd() * 1000.0) };
 
   if (PGain < (ospDecimalValue<3>){0})
   {
     // the auto-tuner found a negative gain sign: convert the coefficients
-    // to positive with REVERSE controller action
+    // to positive with inverted controller action
     PGain = -PGain;
     IGain = -IGain;
     DGain = -DGain;
-    myPID.SetControllerDirection(REVERSE);
-    ctrlDirection = REVERSE;
+    theLoop.invertAction = true;
   }
   else
   {
-    ctrlDirection = DIRECT;
+    theLoop.invertAction = false;
   }
 
-  myPID.SetTunings(double(PGain), double(IGain), double(DGain));
+  theLoop.PGain = PGain;
+  theLoop.IGain = IGain;
+  theLoop.DGain = DGain;
 
   // this will restore the user-requested PID controller mode
   stopAutoTune();
@@ -336,7 +315,7 @@ unsigned long settingsWritebackTime;
 static void markSettingsDirty()
 {
   // capture any possible changes to the output value if we're in MANUAL mode
-  if (modeIndex == MANUAL && !tuning && !tripped)
+  if (manualControl && !tuning && !tripped)
     manualOutput = fakeOutput;
 
   settingsWritebackNeeded = true;
@@ -395,7 +374,10 @@ void loop()
   input = theInputCard.readInput();
 
   if (!isnan(input))
+  {
     pidInput = input;
+    fakeInput = makeDecimal<1>(int(pidInput * 10.0));
+  }
 
   if (tuning)
   {
@@ -416,7 +398,16 @@ void loop()
       profileLoopIteration();
 
     // update the PID
-    myPID.Compute();
+    if (now >= pidTime)
+    {
+      // FIXME: should the loop run continuously, or be frozen when the
+      // system is under manual control?
+      if (!manualControl)
+        fakeOutput = theLoop.updateController(activeSetPoint, fakeInput);
+
+      pidTime += ospPIDLoop::LOOP_CYCLE_MILLISECONDS;
+      output = fakeOutput;
+    }
   }
 
   // after the PID has updated, check the trip limits
@@ -425,7 +416,7 @@ void loop()
     if (tripAutoReset)
       tripped = false;
 
-    if (isnan(input) || input < lowerTripLimit || input > upperTripLimit || tripped)
+    if (isnan(input) || fakeInput < lowerTripLimit || fakeInput > upperTripLimit || tripped)
     {
       output = 0;
       tripped = true;

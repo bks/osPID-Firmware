@@ -36,12 +36,12 @@ void ospBugCheck(const char *block, int line)
     }
 }
 
-byte ATuneModeRemember;
+bool wasManualControl;
 
 static void startAutoTune()
 {
-  ATuneModeRemember = myPID.GetMode();
-  myPID.SetMode(MANUAL);
+  wasManualControl = manualControl;
+  manualControl = true;
 
   aTune.SetNoiseBand(double(aTuneNoise));
   aTune.SetOutputStep(double(aTuneStep));
@@ -54,12 +54,12 @@ static void stopAutoTune()
   aTune.Cancel();
   tuning = false;
 
-  modeIndex = ATuneModeRemember;
+  manualControl = wasManualControl;
 
   // restore the output to the last manual command; it will be overwritten by the PID
   // if the loop is active
   output = double(manualOutput);
-  myPID.SetMode(modeIndex);
+  fakeOutput = manualOutput;
 }
 
 struct ProfileState {
@@ -98,13 +98,13 @@ static bool startCurrentProfileStep()
   switch (profileState.stepType)
   {
   case ospProfile::STEP_RAMP_TO_SETPOINT:
-    profileState.initialSetpoint = fakeSetpoint;
+    profileState.initialSetpoint = activeSetPoint;
     break;
   case ospProfile::STEP_SOAK_AT_VALUE:
     // targetSetpoint is actually maximumError
     break;
   case ospProfile::STEP_JUMP_TO_SETPOINT:
-    setpoint = profileState.targetSetpoint;
+    activeSetPoint = profileState.targetSetpoint;
     break;
   case ospProfile::STEP_WAIT_TO_CROSS:
     profileState.temperatureRising = (fakeInput < profileState.targetSetpoint);
@@ -129,16 +129,16 @@ static void profileLoopIteration()
   case ospProfile::STEP_RAMP_TO_SETPOINT:
     if (now >= profileState.stepEndMillis)
     {
-      setpoint = profileState.targetSetpoint;
+      activeSetPoint = profileState.targetSetpoint;
       break;
     }
     delta = profileState.targetSetpoint - profileState.initialSetpoint;
     // FIXME: does this handle rounding correctly?
-    fakeSetpoint = profileState.targetSetpoint - makeDecimal<1>(
+    activeSetPoint = profileState.targetSetpoint - makeDecimal<1>(
         int(long(delta.rawValue()) * (profileState.stepEndMillis - now) / profileState.stepDuration));
     return;
   case ospProfile::STEP_SOAK_AT_VALUE:
-    delta = abs(fakeSetpoint - fakeInput);
+    delta = abs(activeSetPoint - fakeInput);
     if (delta > profileState.maximumError)
       profileState.stepEndMillis = now + profileState.stepDuration;
     // fall through

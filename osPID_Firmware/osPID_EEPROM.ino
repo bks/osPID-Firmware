@@ -194,8 +194,8 @@ static bool checkEEPROMSettings()
 
 union SettingsByte1 {
   struct {
-    byte pidMode : 1;
-    byte pidDirection : 1;
+    byte manualControl : 1;
+    byte invertAction : 1;
     byte powerOnBehavior : 2;
     byte setpointIndex : 2;
     byte tripLimitsEnabled : 1;
@@ -222,8 +222,8 @@ static void saveEEPROMSettings()
   ospSettingsHelper settings(CRC16_INIT, SETTINGS_SBYTE1_OFFSET);
 
   sb1.byteVal = 0;
-  sb1.pidMode = modeIndex;
-  sb1.pidDirection = ctrlDirection;
+  sb1.manualControl = manualControl;
+  sb1.invertAction = theLoop.invertAction;
   sb1.powerOnBehavior = powerOnBehavior;
   sb1.setpointIndex = setpointIndex;
   sb1.tripLimitsEnabled = tripLimitsEnabled;
@@ -238,9 +238,9 @@ static void saveEEPROMSettings()
   for (byte i = 0; i < SETTINGS_NAME_LENGTH; i++)
     settings.save(controllerName[i]);
 
-  settings.save(PGain);
-  settings.save(IGain);
-  settings.save(DGain);
+  settings.save(theLoop.PGain);
+  settings.save(theLoop.IGain);
+  settings.save(theLoop.DGain);
 
   for (byte i = 0; i < NR_SETPOINTS; i++)
     settings.save(setPoints[i]);
@@ -275,8 +275,8 @@ static void restoreEEPROMSettings()
   ospSettingsHelper settings(CRC16_INIT, SETTINGS_SBYTE1_OFFSET);
 
   settings.restore(sb1.byteVal);
-  modeIndex = sb1.pidMode;
-  ctrlDirection = sb1.pidDirection;
+  manualControl = sb1.manualControl;
+  theLoop.invertAction = sb1.invertAction;
   powerOnBehavior = sb1.powerOnBehavior;
   setpointIndex = sb1.setpointIndex;
   tripLimitsEnabled = sb1.tripLimitsEnabled;
@@ -289,21 +289,21 @@ static void restoreEEPROMSettings()
   for (byte i = 0; i < SETTINGS_NAME_LENGTH; i++)
     settings.restore(controllerName[i]);
 
-  settings.restore(PGain);
-  settings.restore(IGain);
-  settings.restore(DGain);
+  settings.restore(theLoop.PGain);
+  settings.restore(theLoop.IGain);
+  settings.restore(theLoop.DGain);
 
   for (byte i = 0; i < NR_SETPOINTS; i++)
     settings.restore(setPoints[i]);
 
-  setpoint = double(setPoints[setpointIndex]);
-  fakeSetpoint = setPoints[0];
+  activeSetPoint = setPoints[setpointIndex];
 
   settings.restore(aTuneStep);
   settings.restore(aTuneNoise);
   settings.restore(aTuneLookBack);
 
   settings.restore(manualOutput);
+  fakeOutput = manualOutput;
   output = manualOutput;
 
   settings.restore(lowerTripLimit);

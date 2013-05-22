@@ -65,7 +65,7 @@ Command list:
 
   l? #0-1 -- enable or disable interlock temperature Limit
 
-  M? #0-1 -- set the loop to manual/automatic Mode
+  M? #0-1 -- set the loop to manual (1) or PID (0) Mode
 
   N? #String -- Name unit
 
@@ -353,7 +353,7 @@ static void cmdIdentify()
 static void cmdQuery()
 {
   Serial.print(F("S "));
-  serialPrintln(fakeSetpoint);
+  serialPrintln(activeSetPoint);
   Serial.print(F("I "));
   serialPrintln(fakeInput);
   Serial.print(F("O "));
@@ -385,12 +385,12 @@ static void cmdExamineSettings()
   ospSettingsHelper::eepromRead(0, crc16);
   serialPrintln(crc16);
 
-  if (modeIndex == AUTOMATIC)
+  if (!manualControl)
     serialPrintln(F("PID mode"));
   else
     serialPrintln(F("MANUAL mode"));
 
-  if (ctrlDirection == DIRECT)
+  if (!theLoop.invertAction)
     serialPrintln(F("Forward action"));
   else
     serialPrintln(F("Reverse action"));
@@ -660,10 +660,10 @@ static void processSerialCommand()
       serialPrintln(pgm_read_dword_near(&serialSpeedTable[serialSpeed]));
       break;
     case 'D':
-      serialPrintln(DGain);
+      serialPrintln(theLoop.DGain);
       break;
     case 'i':
-      serialPrintln(IGain);
+      serialPrintln(theLoop.IGain);
       break;
     case 'L':
       serialPrintln(lowerTripLimit);
@@ -673,7 +673,7 @@ static void processSerialCommand()
       serialPrintln(tripLimitsEnabled);
       break;
     case 'M':
-      serialPrintln(modeIndex);
+      serialPrintln(int(manualControl));
       break;
     case 'N':
       Serial.print(controllerName);
@@ -686,13 +686,13 @@ static void processSerialCommand()
       serialPrintln(powerOnBehavior);
       break;
     case 'p':
-      serialPrintln(PGain);
+      serialPrintln(theLoop.PGain);
       break;
     case 'R':
-      serialPrintln(ctrlDirection);
+      serialPrintln(int(theLoop.invertAction));
       break;
     case 'S':
-      serialPrintln(fakeSetpoint);
+      serialPrintln(activeSetPoint);
       break;
     case 's':
       serialPrintln(setpointIndex);
@@ -804,7 +804,7 @@ static void processSerialCommand()
   case 'D': // set the D gain
     if (tuning)
       goto out_EMOD;
-    if (!trySetGain(&DGain, i1, d1))
+    if (!trySetGain(&theLoop.DGain, i1, d1))
       goto out_EINV;
     break;
   case 'E': // execute a profile by name
@@ -812,7 +812,7 @@ static void processSerialCommand()
       goto out_EINV;
     goto out_OK; // no EEPROM writeback needed
   case 'e': // execute a profile by number
-    if (tuning || runningProfile || modeIndex != AUTOMATIC)
+    if (tuning || runningProfile || manualControl)
       goto out_EMOD;
 
     activeProfileIndex = i1;
@@ -824,7 +824,7 @@ static void processSerialCommand()
   case 'i': // set the I gain
     if (tuning)
       goto out_EMOD;
-    if (!trySetGain(&IGain, i1, d1))
+    if (!trySetGain(&theLoop.IGain, i1, d1))
       goto out_EINV;
     break;
   case 'K': // memory peek
@@ -850,10 +850,9 @@ static void processSerialCommand()
     tripLimitsEnabled = i1;
     break;
   case 'M': // set the controller mode (PID or manual)
-    modeIndex = i1;
-    if (modeIndex == MANUAL)
+    manualControl = !!i1;
+    if (manualControl)
       fakeOutput = manualOutput;
-    myPID.SetMode(i1);
     break;
   case 'N': // set the unit name
     if (strlen(p) > 16)
@@ -875,7 +874,7 @@ static void processSerialCommand()
       if (o > makeDecimal<1>(1000))
         goto out_EINV;
 
-      if (tuning || runningProfile || modeIndex != MANUAL)
+      if (tuning || runningProfile || manualControl)
         goto out_EMOD;
 
       manualOutput = o;
@@ -894,15 +893,14 @@ static void processSerialCommand()
   case 'p': // set the P gain
     if (tuning)
       goto out_EMOD;
-    if (!trySetGain(&PGain, i1, d1))
+    if (!trySetGain(&theLoop.PGain, i1, d1))
       goto out_EINV;
     break;
   case 'Q': // query current status
     cmdQuery();
     goto out_OK; // no EEPROM writeback needed
   case 'R': // set the controller action direction
-    ctrlDirection = i1;
-    myPID.SetControllerDirection(i1);
+    theLoop.invertAction = !!i1;
     break;
   case 'r': // reset memory
     if (i1 != -999)
@@ -921,7 +919,7 @@ static void processSerialCommand()
         goto out_EMOD;
 
       setPoints[setpointIndex] = sp;
-      fakeSetpoint = sp;
+      activeSetPoint = sp;
     }
     break;
   case 's': // change the active setpoint
@@ -929,7 +927,7 @@ static void processSerialCommand()
       goto out_EINV;
 
     setpointIndex = i1;
-    setpoint = setPoints[setpointIndex];
+    activeSetPoint = setPoints[setpointIndex];
     break;
   case 'T': // clear a trip
     if (!tripped)
