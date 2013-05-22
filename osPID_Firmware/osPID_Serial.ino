@@ -348,6 +348,10 @@ static void cmdIdentify()
   serialPrint(F("Unit \""));
   Serial.print(controllerName);
   serialPrintln('"');
+  serialPrint(F("Input card: "));
+  serialPrintln(theInputCard.cardIdentifier());
+  serialPrint(F("Output card: "));
+  serialPrintln(theOutputCard.cardIdentifier());
 }
 
 static void cmdQuery()
