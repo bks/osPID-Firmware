@@ -33,13 +33,13 @@ Command list:
 
   a? #Number #Number #Integer -- set Autotune parameters: step, noise, and lookback
 
-  B? #Integer #Integer #Number -- set peripheral card floating-point caliBration data:
+  B #Integer #Integer #Number -- set peripheral card floating-point caliBration data:
   the first integer is 0 for the input card and 1 for the output card, the second
   is the parameter index, and the number is the value
 
-  b? #Integer #Integer #Integer -- set peripheral card integer caliBration data:
-  the first integer is 0 for the input card and 1 for the output card, the second
-  is the parameter index, and the third is the value
+  b #Integer #Integer -- get peripheral card integer caliBration data:
+  the first integer is 0 for the input card and 1 for the output card and the second
+  is the parameter index
 
   C -- Cancel any profile execution or auto-tune currently in progress
 
@@ -355,9 +355,9 @@ static void cmdQuery()
   Serial.print(F("S "));
   serialPrintln(activeSetPoint);
   Serial.print(F("I "));
-  serialPrintln(fakeInput);
+  serialPrintln(input);
   Serial.print(F("O "));
-  serialPrintln(fakeOutput);
+  serialPrintln(output);
 
   if (runningProfile)
   {
@@ -446,43 +446,33 @@ static void cmdExamineSettings()
   // peripheral card settings
   serialPrint(F("Input card "));
   serialPrintln(F("calibration data:"));
-  for (byte i = 0; i < theInputCard.integerSettingsCount(); i++)
+  for (byte i = 0; i < theInputCard.settingsCount(); i++)
   {
-    Serial.print(F("  I"));
+    serialPrint(F("  "));
     serialPrint(i);
-    Serial.print(F(": "));
-    serialPrintln(theInputCard.readIntegerSetting(i));
+    serialPrint(F(": "));
+    byte decimals;
+    const char *description = theInputCard.describeSetting(i, &decimals);
+    serialPrint(description);
+    serialPrint(F(" = "));
+    serialPrintDecimal(theInputCard.readSetting(i), decimals);
+    Serial.println();
   }
-
-#if 0
-  for (byte i = 0; i < theInputCard.floatSettingsCount(); i++)
-  {
-    Serial.print(F("  F"));
-    serialPrint(i);
-    Serial.print(F(": "));
-    serialPrintln(theInputCard.readFloatSetting(i));
-  }
-#endif
 
   serialPrint(F("Output card "));
   serialPrintln(F("calibration data:"));  
-  for (byte i = 0; i < theOutputCard.integerSettingsCount(); i++)
+  for (byte i = 0; i < theOutputCard.settingsCount(); i++)
   {
-    Serial.print(F("  I"));
+    serialPrint(F("  "));
     serialPrint(i);
-    Serial.print(F(": "));
-    serialPrintln(theOutputCard.readIntegerSetting(i));
+    serialPrint(F(": "));
+    byte decimals;
+    const char *description = theOutputCard.describeSetting(i, &decimals);
+    serialPrint(description);
+    serialPrint(F(" = "));
+    serialPrintDecimal(theOutputCard.readSetting(i), decimals);
+    Serial.println();
   }
-
-#if 0
-  for (byte i = 0; i < theOutputCard.floatSettingsCount(); i++)
-  {
-    Serial.print(F("  F"));
-    serialPrint(i);
-    Serial.print(F(": "));
-    serialPrintln(theOutputCard.readFloatSetting(i));
-  }
-#endif
 }
 
 static void cmdExamineProfile(byte profileIndex)
@@ -564,7 +554,7 @@ struct SerialCommandParseData {
 // this table must be sorted in ASCII order, that is A-Z then a-z
 PROGMEM SerialCommandParseData commandParseData[] = {
   { 'A', ARGS_NONE },
-  { 'B', ARGS_THREE_NUMBERS | ARGS_FLAG_QUERYABLE | ARGS_FLAG_FIRST_IS_01 },
+  { 'B', ARGS_THREE_NUMBERS | ARGS_FLAG_FIRST_IS_01 },
   { 'C', ARGS_NONE },
   { 'D', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
   { 'E', ARGS_STRING },
@@ -582,7 +572,7 @@ PROGMEM SerialCommandParseData commandParseData[] = {
   { 'V', ARGS_ONE_NUMBER | ARGS_FLAG_PROFILE_NUMBER },
   { 'X', ARGS_NONE },
   { 'a', ARGS_THREE_NUMBERS },
-  { 'b', ARGS_THREE_NUMBERS | ARGS_FLAG_FIRST_IS_01 | ARGS_FLAG_QUERYABLE },
+  { 'b', ARGS_TWO_NUMBERS | ARGS_FLAG_FIRST_IS_01 },
   { 'c', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
   { 'e', ARGS_ONE_NUMBER | ARGS_FLAG_PROFILE_NUMBER },
   { 'i', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
@@ -680,7 +670,7 @@ static void processSerialCommand()
       Serial.println();
       break;
     case 'O':
-      serialPrintln(fakeOutput);
+      serialPrintln(output);
       break;
     case 'o':
       serialPrintln(powerOnBehavior);
@@ -852,7 +842,7 @@ static void processSerialCommand()
   case 'M': // set the controller mode (PID or manual)
     manualControl = !!i1;
     if (manualControl)
-      fakeOutput = manualOutput;
+      output = manualOutput;
     break;
   case 'N': // set the unit name
     if (strlen(p) > 16)
@@ -874,11 +864,11 @@ static void processSerialCommand()
       if (o > makeDecimal<1>(1000))
         goto out_EINV;
 
-      if (tuning || runningProfile || manualControl)
+      if (tuning || runningProfile || !manualControl)
         goto out_EMOD;
 
       manualOutput = o;
-      fakeOutput = o;
+      output = o;
     }
     break;
   case 'o': // set power-on behavior

@@ -43,23 +43,22 @@ static void startAutoTune()
   wasManualControl = manualControl;
   manualControl = true;
 
-  aTune.SetNoiseBand(double(aTuneNoise));
-  aTune.SetOutputStep(double(aTuneStep));
-  aTune.SetLookbackSec(aTuneLookBack);
+  autoTuner.SetNoiseBand(double(aTuneNoise));
+  autoTuner.SetOutputStep(double(aTuneStep));
+  autoTuner.SetLookbackSec(aTuneLookBack);
   tuning = true;
 }
 
 static void stopAutoTune()
 {
-  aTune.Cancel();
+  autoTuner.Cancel();
   tuning = false;
 
   manualControl = wasManualControl;
 
   // restore the output to the last manual command; it will be overwritten by the PID
   // if the loop is active
-  output = double(manualOutput);
-  fakeOutput = manualOutput;
+  output = manualOutput;
 }
 
 struct ProfileState {
@@ -107,7 +106,7 @@ static bool startCurrentProfileStep()
     activeSetPoint = profileState.targetSetpoint;
     break;
   case ospProfile::STEP_WAIT_TO_CROSS:
-    profileState.temperatureRising = (fakeInput < profileState.targetSetpoint);
+    profileState.temperatureRising = (lastGoodInput < profileState.targetSetpoint);
     break;
   default:
     return false;
@@ -138,8 +137,8 @@ static void profileLoopIteration()
         int(long(delta.rawValue()) * (profileState.stepEndMillis - now) / profileState.stepDuration));
     return;
   case ospProfile::STEP_SOAK_AT_VALUE:
-    delta = abs(activeSetPoint - fakeInput);
-    if (delta > profileState.maximumError)
+    delta = abs(activeSetPoint - lastGoodInput);
+    if (delta > profileState.maximumError || input != lastGoodInput)
       profileState.stepEndMillis = now + profileState.stepDuration;
     // fall through
   case ospProfile::STEP_JUMP_TO_SETPOINT:
@@ -147,9 +146,9 @@ static void profileLoopIteration()
       return;
     break;
   case ospProfile::STEP_WAIT_TO_CROSS:
-    if ((input < profileState.targetSetpoint) && profileState.temperatureRising)
+    if ((lastGoodInput < profileState.targetSetpoint) && profileState.temperatureRising)
       return; // not there yet
-    if ((input > profileState.targetSetpoint) && !profileState.temperatureRising)
+    if ((lastGoodInput > profileState.targetSetpoint) && !profileState.temperatureRising)
       return;
     break;
   }

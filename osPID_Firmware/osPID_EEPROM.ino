@@ -303,7 +303,6 @@ static void restoreEEPROMSettings()
   settings.restore(aTuneLookBack);
 
   settings.restore(manualOutput);
-  fakeOutput = manualOutput;
   output = manualOutput;
 
   settings.restore(lowerTripLimit);

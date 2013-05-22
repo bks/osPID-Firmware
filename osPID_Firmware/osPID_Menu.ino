@@ -187,8 +187,8 @@ struct DecimalItem {
 PROGMEM DecimalItem decimalItemData[DECIMAL_ITEM_COUNT] =
 {
   { 'S', DecimalItem::RANGE_M9999_P9999 | DecimalItem::ONE_DECIMAL_PLACE, &activeSetPoint },
-  { 'I', DecimalItem::RANGE_M9999_P9999 | DecimalItem::ONE_DECIMAL_PLACE | DecimalItem::NO_EDIT, &fakeInput },
-  { 'O', DecimalItem::RANGE_0_1000 | DecimalItem::ONE_DECIMAL_PLACE | DecimalItem::EDIT_MANUAL_ONLY, &fakeOutput },
+  { 'I', DecimalItem::RANGE_M9999_P9999 | DecimalItem::ONE_DECIMAL_PLACE | DecimalItem::NO_EDIT, &input },
+  { 'O', DecimalItem::RANGE_0_1000 | DecimalItem::ONE_DECIMAL_PLACE | DecimalItem::EDIT_MANUAL_ONLY, &output },
   { 'P', DecimalItem::RANGE_0_32767 | DecimalItem::THREE_DECIMAL_PLACES, &theLoop.PGain },
   { 'I', DecimalItem::RANGE_0_32767 | DecimalItem::THREE_DECIMAL_PLACES, &theLoop.IGain },
   { 'D', DecimalItem::RANGE_0_32767 | DecimalItem::THREE_DECIMAL_PLACES, &theLoop.DGain },
@@ -254,7 +254,8 @@ static void drawMenu()
     // 2x2 menu mode
     ospAssert(itemCount <= 4);
 
-    for (byte i = 0; i < itemCount; i++) {
+    for (byte i = 0; i < itemCount; i++)
+    {
       bool highlight = (i == menuState.highlightedItemMenuIndex);
       byte item = menuData[menuState.currentMenu].itemAt(i);
 
@@ -732,7 +733,7 @@ static void updownKeyPress(bool up)
       manualControl = !manualControl;
       // use the manual output value
       if (manualControl)
-        output = double(manualOutput);
+        output = manualOutput;
       break;
     case ITEM_PID_DIRECTION:
       theLoop.invertAction = !theLoop.invertAction;
@@ -844,7 +845,7 @@ static void okKeyPress()
     if (tripped && item == ITEM_SETPOINT)
     {
       tripped = false;
-      output = double(manualOutput);
+      output = manualOutput;
       return;
     }
     // it's a numeric value: mark that the user wants to edit it

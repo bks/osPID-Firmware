@@ -96,14 +96,17 @@ ospDecimalValue<1> activeSetPoint = { 250 };
 // the manually-commanded output value
 ospDecimalValue<1> manualOutput = { 0 };
 
+// the actual output command
+ospDecimalValue<1> output;
+
+// the last input value
+ospDecimalValue<1> input;
+
+// the last GOOD input value
+ospDecimalValue<1> lastGoodInput;
+
 // the index of the selected setpoint
 byte setpointIndex = 0;
-
-// temporary values during the fixed-point conversion
-ospDecimalValue<1> fakeInput = { 200 }, fakeOutput = { 0 };
-
-// the variables to which the PID controller is bound
-double input = 30.0, output = 0.0, pidInput = 30.0;
 
 // the hard trip limits
 ospDecimalValue<1> lowerTripLimit = { 0 }, upperTripLimit = { 2000 };
@@ -125,7 +128,10 @@ bool controllerIsBooting = true;
 // the paremeters for the autotuner
 ospDecimalValue<1> aTuneStep = { 200 }, aTuneNoise = { 10 };
 int aTuneLookBack = 10;
-PID_ATune aTune(&pidInput, &output);
+
+// some variable for the autotuner
+double autotunerInput, autotunerCommand;
+PID_ATune autoTuner(&autotunerInput, &autotunerCommand);
 
 // whether the autotuner is active
 bool tuning = false;
@@ -279,9 +285,9 @@ static void checkButtons()
 static void completeAutoTune()
 {
   // We're done, set the tuning parameters
-  ospDecimalValue<3> PGain = (ospDecimalValue<3>){ (int)(aTune.GetKp() * 1000.0) };
-  ospDecimalValue<3> IGain = (ospDecimalValue<3>){ (int)(aTune.GetKi() * 1000.0) };
-  ospDecimalValue<3> DGain = (ospDecimalValue<3>){ (int)(aTune.GetKd() * 1000.0) };
+  ospDecimalValue<3> PGain = (ospDecimalValue<3>){ (int)(autoTuner.GetKp() * 1000.0) };
+  ospDecimalValue<3> IGain = (ospDecimalValue<3>){ (int)(autoTuner.GetKi() * 1000.0) };
+  ospDecimalValue<3> DGain = (ospDecimalValue<3>){ (int)(autoTuner.GetKd() * 1000.0) };
 
   if (PGain < (ospDecimalValue<3>){0})
   {
@@ -316,7 +322,7 @@ static void markSettingsDirty()
 {
   // capture any possible changes to the output value if we're in MANUAL mode
   if (manualControl && !tuning && !tripped)
-    manualOutput = fakeOutput;
+    manualOutput = output;
 
   settingsWritebackNeeded = true;
 
@@ -373,15 +379,16 @@ void loop()
   // read in the input
   input = theInputCard.readInput();
 
-  if (!isnan(input))
+  if (input != makeDecimal<1>(-10000))
   {
-    pidInput = input;
-    fakeInput = makeDecimal<1>(int(pidInput * 10.0));
+    lastGoodInput = input;
   }
 
   if (tuning)
   {
-    byte val = aTune.Runtime();
+    autotunerInput = (lastGoodInput / 10.0);
+    byte val = autoTuner.Runtime();
+    output = makeDecimal<1>(int(autotunerCommand * 10.0));
 
     if (val != 0)
     {
@@ -403,10 +410,9 @@ void loop()
       // FIXME: should the loop run continuously, or be frozen when the
       // system is under manual control?
       if (!manualControl)
-        fakeOutput = theLoop.updateController(activeSetPoint, fakeInput);
+        output = theLoop.updateController(activeSetPoint, lastGoodInput);
 
       pidTime += ospPIDLoop::LOOP_CYCLE_MILLISECONDS;
-      output = fakeOutput;
     }
   }
 
@@ -416,9 +422,9 @@ void loop()
     if (tripAutoReset)
       tripped = false;
 
-    if (isnan(input) || fakeInput < lowerTripLimit || fakeInput > upperTripLimit || tripped)
+    if (input == makeDecimal<1>(-10000) || input < lowerTripLimit || input > upperTripLimit || tripped)
     {
-      output = 0;
+      output = makeDecimal<1>(0);
       tripped = true;
     }
   }

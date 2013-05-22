@@ -7,30 +7,26 @@
 	#include "WProgram.h"
 #endif
 
-#define	FAULT_OPEN			10000
-#define	FAULT_SHORT_GND	10001
-#define	FAULT_SHORT_VCC	10002	
+template<int D> struct ospDecimalValue;
 
-enum	unit_t
+#define	FAULT_OPEN      -10000
+#define	FAULT_SHORT_GND -10001
+#define	FAULT_SHORT_VCC -10002
+
+class MAX31855
 {
-	CELSIUS,
-	FAHRENHEIT
+public:
+  MAX31855(unsigned char SO, unsigned	char CS, unsigned char SCK);
+
+  ospDecimalValue<1> readThermocoupleCelsius();
+  ospDecimalValue<2> readJunctionCelsius();
+
+private:
+  unsigned char so;
+  unsigned char cs;
+  unsigned char sck;
+
+  unsigned long readData();
 };
 
-class	MAX31855
-{
-	public:
-		MAX31855(unsigned char SO, unsigned	char CS, unsigned char SCK);
-	
-		double	readThermocouple(unit_t	unit);
-		double	readJunction(unit_t	unit);
-		
-	private:
-		unsigned char so;
-		unsigned char cs;
-		unsigned char sck;
-		
-		unsigned long readData();
-
-};
 #endif

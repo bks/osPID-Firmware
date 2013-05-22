@@ -2,6 +2,7 @@
 #define OSPDIGITALOUTPUTCARD_H
 
 #include "ospCards.h"
+#include "ospDecimalValue.h"
 
 class ospDigitalOutputCard : public ospBaseOutputCard {
 private:
@@ -9,14 +10,12 @@ private:
   enum { OUTPUT_RELAY = 0, OUTPUT_SSR = 1 };
 
   byte outputType;
-  double outputWindowSeconds;
-  unsigned long outputWindowMilliseconds;
+  int outputWindowMilliseconds;
 
 public:
   ospDigitalOutputCard() 
     : ospBaseOutputCard(),
     outputType(OUTPUT_SSR),
-    outputWindowSeconds(5.0),
     outputWindowMilliseconds(5000)
   { }
 
@@ -25,41 +24,42 @@ public:
     pinMode(SSRPin, OUTPUT);
   }
 
-  const char *cardIdentifier() { return "OID1"; }
+  const char *cardIdentifier() { return PSTR("OUT_DIGITAL"); }
 
   // how many settings does this card have
-  byte floatSettingsCount() { return 1; }
-  byte integerSettingsCount() { return 1; }
+  byte settingsCount() { return 2; }
 
   // read settings from the card
-  double readFloatSetting(byte index) {
-    if (index == 0)
-      return outputWindowSeconds;
-    return -1.0f;
-  }
-
-  int readIntegerSetting(byte index) {
+  int readSetting(byte index) {
     if (index == 0)
       return outputType;
+    else if (index == 1)
+      return outputWindowMilliseconds;
     return -1;
   }
 
   // write settings to the card
-  bool writeFloatSetting(byte index, double val) {
-    if (index == 0) {
-      outputWindowSeconds = val;
-      outputWindowMilliseconds = round(outputWindowSeconds * 1000.0f);
+  bool writeSetting(byte index, int val) {
+    if (index == 0 && (val == OUTPUT_SSR || val == OUTPUT_RELAY)) {
+      outputType = val;
+      return true;
+    }
+    else if (index == 1) {
+      outputWindowMilliseconds = val;
       return true;
     }
     return false;
   }
 
-  bool writeIntegerSetting(byte index, int val) {
-    if (index == 0 && (val == OUTPUT_SSR || val == OUTPUT_RELAY)) {
-      outputType = val;
-      return true;
-    }
-    return false;
+  // describe the available settings
+  const char *describeSetting(byte index, byte *decimals) {
+    *decimals = 0;
+    if (index == 0) {
+      return PSTR("Use RELAY (0) or SSR (1)");
+    } else if (index == 1) {
+      return PSTR("Output PWM window size in milliseconds");
+    } else
+      return 0;
   }
 
   // save and restore settings to/from EEPROM using the settings helper
@@ -73,13 +73,17 @@ public:
     settings.restore(outputType);
   }
 
-  void setOutputPercent(double percent) {
-    unsigned long wind = millis() % outputWindowMilliseconds;
-    unsigned long oVal = (unsigned long)(percent * 0.01 * (double)outputWindowMilliseconds);
+  void setOutputPercent(ospDecimalValue<1> percent) {
+    int wind = millis() % outputWindowMilliseconds;
+
+    // since |percent| is effectively integer thousandths, we can just
+    // divide here to get the number of milliseconds that the output should
+    // be ON
+    int oVal = long(outputWindowMilliseconds * percent.rawValue()) / 1000;
 
     if (outputType == OUTPUT_RELAY)
       digitalWrite(RelayPin, (oVal>wind) ? HIGH : LOW);
-    else if(outputType == OUTPUT_SSR)
+    else
       digitalWrite(SSRPin, (oVal>wind) ? HIGH : LOW);
   }
 };
