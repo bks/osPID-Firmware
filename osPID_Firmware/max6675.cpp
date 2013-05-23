@@ -5,6 +5,7 @@
 #include <util/delay.h>
 #include <stdlib.h>
 #include "max6675_local.h"
+#include "ospDecimalValue.h"
 
 MAX6675::MAX6675(int8_t SCLK, int8_t CS, int8_t MISO) {
   sclk = SCLK;
@@ -13,13 +14,13 @@ MAX6675::MAX6675(int8_t SCLK, int8_t CS, int8_t MISO) {
 
   //define pin modes
   pinMode(cs, OUTPUT);
-  pinMode(sclk, OUTPUT); 
+  pinMode(sclk, OUTPUT);
   pinMode(miso, INPUT);
 
   digitalWrite(cs, HIGH);
 }
-double MAX6675::readCelsius(void) {
 
+int16_t MAX6675::readQuarterCelsius(void) {
   uint16_t v;
 
   digitalWrite(cs, LOW);
@@ -33,20 +34,28 @@ double MAX6675::readCelsius(void) {
 
   if (v & 0x4) {
     // uh oh, no thermocouple attached!
-    return NAN; 
-    //return -100;
+    return -4000; // -1000.0 is not a valid temperature
   }
 
   v >>= 3;
-
-  return v*0.25;
+  return v;
 }
 
-double MAX6675::readFarenheit(void) {
-  return readCelsius() * 1.8 + 32;
+ospDecimalValue<1> MAX6675::readCelsius(void) {
+  int16_t v = readQuarterCelsius();
+
+  if (v == -4000)
+    return makeDecimal<1>(-10000);
+
+  // v is in quarter-units, now we want to convert it to tenths
+  // we multiply it by 10 to put it in 40ths, and then divide by 4 to put it in
+  // 10ths
+  ospDecimalValue<1> quarters = makeDecimal<1>(v * 10);
+  return (quarters / makeDecimal<2>(400)).rescale<1>();
 }
 
-byte MAX6675::spiread(void) { 
+
+byte MAX6675::spiread(void) {
   int i;
   byte d = 0;
 

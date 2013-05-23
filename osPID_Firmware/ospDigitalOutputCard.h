@@ -2,6 +2,7 @@
 #define OSPDIGITALOUTPUTCARD_H
 
 #include "ospCards.h"
+#include "ospDecimalValue.h"
 
 class ospDigitalOutputCard : public ospBaseOutputCard {
 private:
@@ -9,15 +10,21 @@ private:
   enum { OUTPUT_RELAY = 0, OUTPUT_SSR = 1 };
 
   byte outputType;
-  double outputWindowSeconds;
-  unsigned long outputWindowMilliseconds;
+  unsigned int outputWindowMilliseconds;
+  unsigned int minimumToggleMilliseconds;
+  unsigned int toggleEpoch;
+  bool hasBeenOnThisEpoch;
+  byte oldState;
 
 public:
   ospDigitalOutputCard() 
     : ospBaseOutputCard(),
     outputType(OUTPUT_SSR),
-    outputWindowSeconds(5.0),
-    outputWindowMilliseconds(5000)
+    outputWindowMilliseconds(5000),
+    minimumToggleMilliseconds(50),
+    toggleEpoch(0),
+    hasBeenOnThisEpoch(false),
+    oldState(LOW)
   { }
 
   void initialize() {
@@ -25,62 +32,101 @@ public:
     pinMode(SSRPin, OUTPUT);
   }
 
-  const char *cardIdentifier() { return "OID1"; }
+  const char *cardIdentifier() { return PSTR("OUT_DIGITAL"); }
 
   // how many settings does this card have
-  byte floatSettingsCount() { return 1; }
-  byte integerSettingsCount() { return 1; }
+  byte settingsCount() { return 2; }
 
   // read settings from the card
-  double readFloatSetting(byte index) {
-    if (index == 0)
-      return outputWindowSeconds;
-    return -1.0f;
-  }
-
-  int readIntegerSetting(byte index) {
+  int readSetting(byte index) {
     if (index == 0)
       return outputType;
+    else if (index == 1)
+      return outputWindowMilliseconds;
+    else if (index == 2)
+      return minimumToggleMilliseconds;
     return -1;
   }
 
   // write settings to the card
-  bool writeFloatSetting(byte index, double val) {
-    if (index == 0) {
-      outputWindowSeconds = val;
-      outputWindowMilliseconds = round(outputWindowSeconds * 1000.0f);
+  bool writeSetting(byte index, int val) {
+    if (index == 0 && (val == OUTPUT_SSR || val == OUTPUT_RELAY)) {
+      outputType = val;
+      return true;
+    }
+    else if (index == 1) {
+      outputWindowMilliseconds = val;
+      return true;
+    } else if (index == 2) {
+      minimumToggleMilliseconds = val;
       return true;
     }
     return false;
   }
 
-  bool writeIntegerSetting(byte index, int val) {
-    if (index == 0 && (val == OUTPUT_SSR || val == OUTPUT_RELAY)) {
-      outputType = val;
-      return true;
-    }
-    return false;
+  // describe the available settings
+  const char *describeSetting(byte index, byte *decimals) {
+    *decimals = 0;
+    if (index == 0) {
+      return PSTR("Use RELAY (0) or SSR (1)");
+    } else if (index == 1) {
+      return PSTR("Output PWM window size in milliseconds");
+    } else if (index == 2) {
+      return PSTR("Minimum time between PWM edges in milliseconds");
+    } else
+      return 0;
   }
 
   // save and restore settings to/from EEPROM using the settings helper
   void saveSettings(ospSettingsHelper& settings) {
     settings.save(outputWindowMilliseconds);
     settings.save(outputType);
+    settings.save(minimumToggleMilliseconds);
   }
 
   void restoreSettings(ospSettingsHelper& settings) {
     settings.restore(outputWindowMilliseconds);
     settings.restore(outputType);
+    settings.restore(minimumToggleMilliseconds);
   }
 
-  void setOutputPercent(double percent) {
-    unsigned long wind = millis() % outputWindowMilliseconds;
-    unsigned long oVal = (unsigned long)(percent * 0.01 * (double)outputWindowMilliseconds);
+  void setOutputPercent(ospDecimalValue<1> percent) {
+    unsigned long t = millis();
+    int wind = t % outputWindowMilliseconds;
+    unsigned int epoch = t / outputWindowMilliseconds;
+
+    // every epoch, we output at most one pulse
+    if (epoch != toggleEpoch)
+    {
+      hasBeenOnThisEpoch = false;
+      toggleEpoch = epoch;
+    }
+
+    // since |percent| is effectively integer thousandths, we can just
+    // divide here to get the number of milliseconds that the output should
+    // be ON
+    int oVal = long(outputWindowMilliseconds) * percent.rawValue() / 1000L;
+
+    if (oVal < minimumToggleMilliseconds)
+      oVal = 0;
+    if (outputWindowMilliseconds - oVal < minimumToggleMilliseconds)
+      oVal = outputWindowMilliseconds;
+
+    byte newState = (oVal > wind) ? HIGH : LOW;
+
+    // don't try to turn back ON if the command changes in the middle of a PWM period
+    if (oldState != newState && newState == HIGH && hasBeenOnThisEpoch)
+      return;
+
+    if (newState == HIGH)
+      hasBeenOnThisEpoch = true;
+
+    oldState = newState;
 
     if (outputType == OUTPUT_RELAY)
-      digitalWrite(RelayPin, (oVal>wind) ? HIGH : LOW);
-    else if(outputType == OUTPUT_SSR)
-      digitalWrite(SSRPin, (oVal>wind) ? HIGH : LOW);
+      digitalWrite(RelayPin, newState);
+    else
+      digitalWrite(SSRPin, newState);
   }
 };
 

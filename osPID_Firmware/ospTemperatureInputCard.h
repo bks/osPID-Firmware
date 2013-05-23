@@ -2,6 +2,7 @@
 #define OSPTEMPERATUREINPUTCARD_H
 
 #include "ospCards.h"
+#include "ospDecimalValue.h"
 #include "ospSettingsHelper.h"
 #include "max6675_local.h"
 #include "MAX31855_local.h"
@@ -16,10 +17,15 @@ private:
   enum { INPUT_THERMOCOUPLE = 0, INPUT_THERMISTOR = 1 };
 
   byte inputType;
-  double THERMISTORNOMINAL;
-  double BCOEFFICIENT;
-  double TEMPERATURENOMINAL;
-  double REFERENCE_RESISTANCE;
+  union {
+    struct {
+      ospDecimalValue<0> thermistorNominalOhms;
+      ospDecimalValue<0> referenceResistorOhms;
+      ospDecimalValue<1> BCoefficient;
+      ospDecimalValue<1> thermistorReferenceTemperatureCelsius;
+    };
+    int settingsBlock[4];
+  };
 
   TCType thermocouple;
 
@@ -27,10 +33,10 @@ public:
   ospTemperatureInputCard() :
     ospBaseInputCard(),
     inputType(INPUT_THERMOCOUPLE),
-    THERMISTORNOMINAL(10.0f),
-    BCOEFFICIENT(1.0f),
-    TEMPERATURENOMINAL(293.15f),
-    REFERENCE_RESISTANCE(10.0f),
+    thermistorNominalOhms(makeDecimal<0>(1000)),
+    referenceResistorOhms(makeDecimal<0>(1000)),
+    BCoefficient(makeDecimal<1>(4000)),
+    thermistorReferenceTemperatureCelsius(makeDecimal<1>(200)),
     thermocouple(thermocoupleCLK, thermocoupleCS, thermocoupleSO)
   { }
 
@@ -42,26 +48,26 @@ public:
 
 private:
   // actually read the thermocouple
-  double readThermocouple();
+  ospDecimalValue<1> readThermocouple();
 
   // convert the thermistor voltage to a temperature
-  double thermistorVoltageToTemperature(int voltage)
+  ospDecimalValue<1> thermistorVoltageToTemperature(int voltage)
   {
-    double R = REFERENCE_RESISTANCE / (1024.0/(double)voltage - 1);
+    double R = referenceResistorOhms.toDouble() / (1024.0/(double)voltage - 1);
     double steinhart;
-    steinhart = R / THERMISTORNOMINAL;     // (R/Ro)
+    steinhart = R / thermistorNominalOhms.toDouble();     // (R/Ro)
     steinhart = log(steinhart);                  // ln(R/Ro)
-    steinhart /= BCOEFFICIENT;                   // 1/B * ln(R/Ro)
-    steinhart += 1.0 / (TEMPERATURENOMINAL + 273.15); // + (1/To)
+    steinhart /= BCoefficient.toDouble();                   // 1/B * ln(R/Ro)
+    steinhart += 1.0 / (thermistorReferenceTemperatureCelsius.toDouble() + 273.15); // + (1/To)
     steinhart = 1.0 / steinhart;                 // Invert
     steinhart -= 273.15;                         // convert to C
 
-    return steinhart;
+    return makeDecimal<1>(int(steinhart * 10.0));
   }
 
 public:
   // read the card
-  double readInput() {
+  ospDecimalValue<1> readInput() {
     if (inputType == INPUT_THERMISTOR) {
       int voltage = analogRead(thermistorPin);
       return thermistorVoltageToTemperature(voltage);
@@ -71,96 +77,89 @@ public:
   }
 
   // how many settings does this card have
-  byte floatSettingsCount() { return 4; }
-  byte integerSettingsCount() { return 1; }
+  byte settingsCount() { return 5; }
 
   // read settings from the card
-  double readFloatSetting(byte index) {
-    switch (index) {
-    case 0:
-      return THERMISTORNOMINAL;
-    case 1:
-      return BCOEFFICIENT;
-    case 2:
-      return TEMPERATURENOMINAL;
-    case 3:
-      return REFERENCE_RESISTANCE;
-    default:
-      return -1.0f;
-    }
-  }
-
-  int readIntegerSetting(byte index) {
+  int readSetting(byte index) {
     if (index == 0)
       return inputType;
-    return -1;
+    else if (index < 5)
+      return settingsBlock[index];
+    else
+      return -1;
   }
 
   // write settings to the card
-  bool writeFloatSetting(byte index, double val) {
-    switch (index) {
-    case 0:
-      THERMISTORNOMINAL = val;
-      return true;
-    case 1:
-      BCOEFFICIENT = val;
-      return true;
-    case 2:
-      TEMPERATURENOMINAL = val;
-      return true;
-    case 3:
-      REFERENCE_RESISTANCE = val;
-      return true;
-    default:
-      return false;
-    }
-  }
-
-  bool writeIntegerSetting(byte index, int val) {
+  bool writeSetting(byte index, int val) {
     if (index == 0 && (val == INPUT_THERMOCOUPLE || val == INPUT_THERMISTOR)) {
       inputType = val;
-      return true;
+    } else if (index < 5)
+      settingsBlock[index] = val;
+    else
+      return false;
+    return true;
+  }
+
+  // describe the card settings
+  const char * describeSetting(byte index, byte *decimals) {
+    if (index < 3)
+      *decimals = 0;
+    else
+      *decimals = 1;
+
+    switch (index) {
+    case 0:
+      return PSTR("Use the THERMOCOUPLE (0) or THERMISTOR (1) reader");
+    case 1:
+      return PSTR("The thermistor nominal resistance (ohms)");
+    case 2:
+      return PSTR("The reference resistor value (ohms)");
+    case 3:
+      return PSTR("The thermistor B coefficient");
+    case 4:
+      return PSTR("The thermistor reference temperature (Celsius)");
+    default:
+      return 0;
     }
-    return false;
   }
 
   // save and restore settings to/from EEPROM using the settings helper
   void saveSettings(ospSettingsHelper& settings) {
-    settings.save(THERMISTORNOMINAL);
-    settings.save(BCOEFFICIENT);
-    settings.save(TEMPERATURENOMINAL);
-    settings.save(REFERENCE_RESISTANCE);
     settings.save(inputType);
+    settings.save(thermistorNominalOhms);
+    settings.save(referenceResistorOhms);
+    settings.save(BCoefficient);
+    settings.save(thermistorReferenceTemperatureCelsius);
   }
 
   void restoreSettings(ospSettingsHelper& settings) {
-    settings.restore(THERMISTORNOMINAL);
-    settings.restore(BCOEFFICIENT);
-    settings.restore(TEMPERATURENOMINAL);
-    settings.restore(REFERENCE_RESISTANCE);
     settings.restore(inputType);
+    settings.restore(thermistorNominalOhms);
+    settings.restore(referenceResistorOhms);
+    settings.restore(BCoefficient);
+    settings.restore(thermistorReferenceTemperatureCelsius);
   }
 };
 
-template<> double ospTemperatureInputCard<MAX6675>::readThermocouple() {
+template<> ospDecimalValue<1> ospTemperatureInputCard<MAX6675>::readThermocouple() {
   return thermocouple.readCelsius();
 }
 
 template<> const char *ospTemperatureInputCard<MAX6675>::cardIdentifier() {
-  return "IID1";
+  return PSTR("IN_TEMP_V1.10");
 }
 
-template<> double ospTemperatureInputCard<MAX31855>::readThermocouple() {
-   double val = thermocouple.readThermocouple(CELSIUS);
- 
-   if (val == FAULT_OPEN || val == FAULT_SHORT_GND || val == FAULT_SHORT_VCC)
-     val = NAN;
+template<> ospDecimalValue<1> ospTemperatureInputCard<MAX31855>::readThermocouple() {
+   ospDecimalValue<1> val = thermocouple.readThermocoupleCelsius();
+
+   if (val == makeDecimal<1>(FAULT_OPEN) || val == makeDecimal<1>(FAULT_SHORT_GND) || val == makeDecimal<1>(FAULT_SHORT_VCC))
+     val = makeDecimal<1>(-10000);
 
    return val;
 }
 
 template<> const char *ospTemperatureInputCard<MAX31855>::cardIdentifier() {
-  return "IID2";
+  return PSTR("IN_TEMP_V1.20");
 }
 
 typedef ospTemperatureInputCard<MAX6675> ospTemperatureInputCardV1_10;

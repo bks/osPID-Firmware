@@ -2,12 +2,13 @@
 
 #include <LiquidCrystal.h>
 #include <Arduino.h>
-#include "PID_v1_local.h"
 #include "PID_AutoTune_v0_local.h"
 #include "ospAnalogButton.h"
 #include "ospCardSimulator.h"
+#include "ospDecimalValue.h"
 #include "ospDigitalOutputCard.h"
 #include "ospTemperatureInputCard.h"
+#include "ospPIDLoop.h"
 #include "ospProfile.h"
 
 #undef BUGCHECK
@@ -81,27 +82,34 @@ boolean runningProfile = false;
 char controllerName[17] = { 'o', 's', 'P', 'I', 'D', ' ',
        'C', 'o', 'n', 't', 'r', 'o', 'l', 'l', 'e', 'r', '\0' };
 
-// the gain coefficients of the PID controller
-double kp = 2, ki = 0.5, kd = 2;
-
-// the direction flag for the PID controller
-byte ctrlDirection = DIRECT;
+// the PID controller
+ospPIDLoop theLoop = { { 2000 }, { 500 }, { 2000 }, { 0 }, { 0 }, false };
 
 // whether the controller is executing a PID law or just outputting a manual
 // value
-byte modeIndex = MANUAL;
+bool manualControl = true;
 
 // the 4 setpoints we can easily switch between
-double setPoints[4] = { 25.0f, 75.0f, 150.0f, 300.0f };
+ospDecimalValue<1> setPoints[4] = { { 250 }, { 750 }, { 1500 }, { 3000 } };
+ospDecimalValue<1> activeSetPoint = { 250 };
+
+// the manually-commanded output value
+ospDecimalValue<1> manualOutput = { 0 };
+
+// the actual output command
+ospDecimalValue<1> output;
+
+// the last input value
+ospDecimalValue<1> input;
+
+// the last GOOD input value
+ospDecimalValue<1> lastGoodInput;
 
 // the index of the selected setpoint
 byte setpointIndex = 0;
 
-// the variables to which the PID controller is bound
-double setpoint = 75.0, input = 30.0, output = 0.0, pidInput = 30.0, manualOutput = 0.0;
-
 // the hard trip limits
-double lowerTripLimit = 0.0, upperTripLimit = 200.0;
+ospDecimalValue<1> lowerTripLimit = { 0 }, upperTripLimit = { 2000 };
 bool tripLimitsEnabled;
 bool tripped;
 bool tripAutoReset;
@@ -118,31 +126,21 @@ byte powerOnBehavior = POWERON_CONTINUE_LOOP;
 bool controllerIsBooting = true;
 
 // the paremeters for the autotuner
-double aTuneStep = 20, aTuneNoise = 1;
-unsigned int aTuneLookBack = 10;
-PID_ATune aTune(&pidInput, &output);
+ospDecimalValue<1> aTuneStep = { 200 }, aTuneNoise = { 10 };
+int aTuneLookBack = 10;
+
+// some variable for the autotuner
+PID_ATune autoTuner(&lastGoodInput, &output);
 
 // whether the autotuner is active
 bool tuning = false;
 
-// the actual PID controller
-PID myPID(&pidInput, &output, &setpoint,kp,ki,kd, DIRECT);
-
 // timekeeping to schedule the various tasks in the main loop
-unsigned long now, lcdTime;
-
-
-// how often to step the PID loop, in milliseconds: it is impractical to set this
-// to less than ~250 (i.e. faster than 4 Hz), since (a) the input card has up to 100 ms
-// of latency, and (b) the controller needs time to handle the LCD, EEPROM, and serial
-// I/O
-enum { PID_LOOP_SAMPLE_TIME = 1000 };
+unsigned long now, lcdTime, pidTime;
 
 // initialize the controller: this is called by the Arduino runtime on bootup
 void setup()
 {
-  lcdTime = 25;
-
   // set up the LCD
   theLCD.begin(8, 2);
   drawStartupBanner();
@@ -165,17 +163,10 @@ void setup()
 
   // show the controller name?
 
-  // configure the PID loop
-  myPID.SetSampleTime(PID_LOOP_SAMPLE_TIME);
-  myPID.SetOutputLimits(0, 100);
-  myPID.SetTunings(kp, ki, kd);
-  myPID.SetControllerDirection(ctrlDirection);
-
   if (powerOnBehavior == POWERON_DISABLE) {
-    modeIndex = MANUAL;
+    manualControl = true;
     output = manualOutput;
   }
-  myPID.SetMode(modeIndex);
 
   // finally, check whether we were interrupted in the middle of a profile
   if (profileWasInterrupted())
@@ -189,6 +180,9 @@ void setup()
       recordProfileCompletion(); // we don't want to pick up again, so mark it completed
   }
 
+  now = millis();
+  lcdTime = now + 25;
+  pidTime = now + 5;
   controllerIsBooting = false;
 }
 
@@ -290,30 +284,27 @@ static void checkButtons()
 static void completeAutoTune()
 {
   // We're done, set the tuning parameters
-  kp = aTune.GetKp();
-  ki = aTune.GetKi();
-  kd = aTune.GetKd();
+  ospDecimalValue<3> PGain = (ospDecimalValue<3>){ (int)(autoTuner.GetKp() * 1000.0) };
+  ospDecimalValue<3> IGain = (ospDecimalValue<3>){ (int)(autoTuner.GetKi() * 1000.0) };
+  ospDecimalValue<3> DGain = (ospDecimalValue<3>){ (int)(autoTuner.GetKd() * 1000.0) };
 
-  // set the PID controller to accept the new gain settings
-  myPID.SetControllerDirection(DIRECT);
-  myPID.SetMode(AUTOMATIC);
-
-  if (kp < 0)
+  if (PGain < (ospDecimalValue<3>){0})
   {
     // the auto-tuner found a negative gain sign: convert the coefficients
-    // to positive with REVERSE controller action
-    kp = -kp;
-    ki = -ki;
-    kd = -kd;
-    myPID.SetControllerDirection(REVERSE);
-    ctrlDirection = REVERSE;
+    // to positive with inverted controller action
+    PGain = -PGain;
+    IGain = -IGain;
+    DGain = -DGain;
+    theLoop.invertAction = true;
   }
   else
   {
-    ctrlDirection = DIRECT;
+    theLoop.invertAction = false;
   }
 
-  myPID.SetTunings(kp, ki, kd);
+  theLoop.PGain = PGain;
+  theLoop.IGain = IGain;
+  theLoop.DGain = DGain;
 
   // this will restore the user-requested PID controller mode
   stopAutoTune();
@@ -329,7 +320,7 @@ unsigned long settingsWritebackTime;
 static void markSettingsDirty()
 {
   // capture any possible changes to the output value if we're in MANUAL mode
-  if (modeIndex == MANUAL && !tuning && !tripped)
+  if (manualControl && !tuning && !tripped)
     manualOutput = output;
 
   settingsWritebackNeeded = true;
@@ -387,12 +378,14 @@ void loop()
   // read in the input
   input = theInputCard.readInput();
 
-  if (!isnan(input))
-    pidInput = input;
+  if (input != makeDecimal<1>(-10000))
+  {
+    lastGoodInput = input;
+  }
 
   if (tuning)
   {
-    byte val = aTune.Runtime();
+    byte val = autoTuner.Runtime();
 
     if (val != 0)
     {
@@ -409,7 +402,15 @@ void loop()
       profileLoopIteration();
 
     // update the PID
-    myPID.Compute();
+    if (now >= pidTime)
+    {
+      // FIXME: should the loop run continuously, or be frozen when the
+      // system is under manual control?
+      if (!manualControl)
+        output = theLoop.updateController(activeSetPoint, lastGoodInput);
+
+      pidTime += ospPIDLoop::LOOP_CYCLE_MILLISECONDS;
+    }
   }
 
   // after the PID has updated, check the trip limits
@@ -418,9 +419,9 @@ void loop()
     if (tripAutoReset)
       tripped = false;
 
-    if (isnan(input) || input < lowerTripLimit || input > upperTripLimit || tripped)
+    if (input == makeDecimal<1>(-10000) || input < lowerTripLimit || input > upperTripLimit || tripped)
     {
-      output = 0;
+      output = makeDecimal<1>(0);
       tripped = true;
     }
   }

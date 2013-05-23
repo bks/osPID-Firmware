@@ -33,13 +33,13 @@ Command list:
 
   a? #Number #Number #Integer -- set Autotune parameters: step, noise, and lookback
 
-  B? #Integer #Integer #Number -- set peripheral card floating-point caliBration data:
+  B #Integer #Integer #Number -- set peripheral card floating-point caliBration data:
   the first integer is 0 for the input card and 1 for the output card, the second
   is the parameter index, and the number is the value
 
-  b? #Integer #Integer #Integer -- set peripheral card integer caliBration data:
-  the first integer is 0 for the input card and 1 for the output card, the second
-  is the parameter index, and the third is the value
+  b #Integer #Integer -- get peripheral card integer caliBration data:
+  the first integer is 0 for the input card and 1 for the output card and the second
+  is the parameter index
 
   C -- Cancel any profile execution or auto-tune currently in progress
 
@@ -65,7 +65,7 @@ Command list:
 
   l? #0-1 -- enable or disable interlock temperature Limit
 
-  M? #0-1 -- set the loop to manual/automatic Mode
+  M? #0-1 -- set the loop to manual (1) or PID (0) Mode
 
   N? #String -- Name unit
 
@@ -145,47 +145,13 @@ static void setupSerial()
   Serial.begin(kbps);
 }
 
-// parse an int out of a string; returns a pointer to the first non-numeric
-// character
-static const char * parseInt(const char *str, long *out)
+static const char * parseDecimal(const char *str, long *out, byte *decimals)
 {
   long value = 0;
-  bool isNegative = false;
+  byte dec = 0;
 
-  if (str[0] == '-')
-  {
-    isNegative = true;
-    str++;
-  }
-
-  while (true)
-  {
-    char c = *str;
-
-    if (c < '0' || c > '9')
-    {
-      if (isNegative)
-        value = -value;
-
-      *out = value;
-      return str;
-    }
-
-    str++;
-    value = value * 10 + (c - '0');
-  }
-}
-
-// parse a simple floating-point value out of a string; returns a pointer
-// to the first non-numeric character
-static const char * parseFloat(const char *str, double *out)
-{
   bool isNegative = false;
   bool hasFraction = false;
-  double multiplier = 1.0;
-  long value = 0;
-
-  *out = NAN;
 
   if (str[0] == '-')
   {
@@ -212,7 +178,8 @@ end_of_number:
       if (isNegative)
         value = -value;
 
-      *out = value * multiplier;
+      *out = value;
+      *decimals = dec;
       return str;
     }
 
@@ -220,23 +187,80 @@ end_of_number:
     value = value * 10 + (c - '0');
 
     if (hasFraction)
-      multiplier *= 0.1;
+      dec++;
   }
+}
+
+static int pow10(byte n)
+{
+  int result = 1;
+
+  while (n--)
+    result *= 10;
+
+  return result;
+}
+
+static int coerceToDecimal(long val, byte currentDecimals, byte desiredDecimals)
+{
+  if (currentDecimals < desiredDecimals)
+    return int(val * pow10(desiredDecimals - currentDecimals));
+  else if (desiredDecimals < currentDecimals)
+  {
+    // need to do a rounded division
+    int divisor = pow10(currentDecimals - desiredDecimals);
+    int quot = val / divisor;
+    int rem = val % divisor;
+
+    if (abs(rem) >= divisor / 2)
+    {
+      if (val < 0)
+        quot--;
+      else
+        quot++;
+    }
+    return quot;
+  }
+  else
+    return int(val);
+}
+
+template<int D> static ospDecimalValue<D> makeDecimal(long val, byte currentDecimals)
+{
+  return makeDecimal<D>(coerceToDecimal(val, currentDecimals, D));
 }
 
 // since the serial buffer is finite, we perform a realtime loop iteration
 // between each serial write
-template<typename T> void __attribute__((noinline)) serialPrint(T t)
+template<typename T> static void __attribute__((noinline)) serialPrint(T t)
 {
   Serial.print(t);
   realtimeLoop();
 }
 
-template<typename T> void __attribute__((noinline)) serialPrintln(T t)
+template<typename T> static void __attribute__((noinline)) serialPrintln(T t)
 {
   Serial.print(t);
   Serial.println();
   realtimeLoop();
+}
+
+static void serialPrintDecimal(int val, byte decimals)
+{
+  char buffer[8];
+  char *p = formatDecimalValue(buffer, val, decimals);
+  serialPrint(p);
+}
+
+template<int D> static void serialPrint(ospDecimalValue<D> val)
+{
+  serialPrintDecimal(val.rawValue(), D);
+}
+
+template<int D> static void serialPrintln(ospDecimalValue<D> val)
+{
+  serialPrintDecimal(val.rawValue(), D);
+  Serial.println();
 }
 
 static bool cmdSetSerialSpeed(const long& speed)
@@ -324,12 +348,16 @@ static void cmdIdentify()
   serialPrint(F("Unit \""));
   Serial.print(controllerName);
   serialPrintln('"');
+  serialPrint(F("Input card: "));
+  serialPrintln(theInputCard.cardIdentifier());
+  serialPrint(F("Output card: "));
+  serialPrintln(theOutputCard.cardIdentifier());
 }
 
 static void cmdQuery()
 {
   Serial.print(F("S "));
-  serialPrintln(setpoint);
+  serialPrintln(activeSetPoint);
   Serial.print(F("I "));
   serialPrintln(input);
   Serial.print(F("O "));
@@ -361,12 +389,12 @@ static void cmdExamineSettings()
   ospSettingsHelper::eepromRead(0, crc16);
   serialPrintln(crc16);
 
-  if (modeIndex == AUTOMATIC)
+  if (!manualControl)
     serialPrintln(F("PID mode"));
   else
     serialPrintln(F("MANUAL mode"));
 
-  if (ctrlDirection == DIRECT)
+  if (!theLoop.invertAction)
     serialPrintln(F("Forward action"));
   else
     serialPrintln(F("Reverse action"));
@@ -422,38 +450,32 @@ static void cmdExamineSettings()
   // peripheral card settings
   serialPrint(F("Input card "));
   serialPrintln(F("calibration data:"));
-  for (byte i = 0; i < theInputCard.integerSettingsCount(); i++)
+  for (byte i = 0; i < theInputCard.settingsCount(); i++)
   {
-    Serial.print(F("  I"));
+    serialPrint(F("  "));
     serialPrint(i);
-    Serial.print(F(": "));
-    serialPrintln(theInputCard.readIntegerSetting(i));
-  }
-
-  for (byte i = 0; i < theInputCard.floatSettingsCount(); i++)
-  {
-    Serial.print(F("  F"));
-    serialPrint(i);
-    Serial.print(F(": "));
-    serialPrintln(theInputCard.readFloatSetting(i));
+    serialPrint(F(": "));
+    byte decimals;
+    const char *description = theInputCard.describeSetting(i, &decimals);
+    serialPrint(description);
+    serialPrint(F(" = "));
+    serialPrintDecimal(theInputCard.readSetting(i), decimals);
+    Serial.println();
   }
 
   serialPrint(F("Output card "));
   serialPrintln(F("calibration data:"));  
-  for (byte i = 0; i < theOutputCard.integerSettingsCount(); i++)
+  for (byte i = 0; i < theOutputCard.settingsCount(); i++)
   {
-    Serial.print(F("  I"));
+    serialPrint(F("  "));
     serialPrint(i);
-    Serial.print(F(": "));
-    serialPrintln(theOutputCard.readIntegerSetting(i));
-  }
-
-  for (byte i = 0; i < theOutputCard.floatSettingsCount(); i++)
-  {
-    Serial.print(F("  F"));
-    serialPrint(i);
-    Serial.print(F(": "));
-    serialPrintln(theOutputCard.readFloatSetting(i));
+    serialPrint(F(": "));
+    byte decimals;
+    const char *description = theOutputCard.describeSetting(i, &decimals);
+    serialPrint(description);
+    serialPrint(F(" = "));
+    serialPrintDecimal(theOutputCard.readSetting(i), decimals);
+    Serial.println();
   }
 }
 
@@ -479,7 +501,7 @@ static void cmdExamineProfile(byte profileIndex)
   {
     byte type;
     unsigned long duration;
-    double endpoint;
+    ospDecimalValue<1> endpoint;
 
     getProfileStepData(profileIndex, i, &type, &duration, &endpoint);
 
@@ -497,22 +519,32 @@ static void cmdExamineProfile(byte profileIndex)
   }
 }
 
+static bool trySetGain(ospDecimalValue<3> *p, long val, byte decimals)
+{
+  ospDecimalValue<3> gain = makeDecimal<3>(val, decimals);
+
+  if (gain > makeDecimal<3>(32767) || gain < makeDecimal<3>(0))
+    return false;
+
+  *p = gain;
+  return true;
+}
+
 // The command line parsing is table-driven, which saves more than 1.5 kB of code
 // space.
 
 enum {
   ARGS_NONE = 0,
-  ARGS_INTEGER,
-  ARGS_FLOAT,
-  ARGS_FLOAT_FLOAT,
-  ARGS_INTEGER_INTEGER,
-  ARGS_INTEGER_INTEGER_FLOAT,
-  ARGS_INTEGER_INTEGER_INTEGER,
-  ARGS_FLOAT_FLOAT_INTEGER,
+  ARGS_ONE_NUMBER,
+  ARGS_TWO_NUMBERS,
+  ARGS_THREE_NUMBERS,
   ARGS_STRING,
-  ARGS_NOT_FOUND = 0x7F,
+  ARGS_NOT_FOUND = 0x0F,
+  ARGS_FLAG_PROFILE_NUMBER = 0x10, // must be 0 to NR_PROFILES-1
+  ARGS_FLAG_FIRST_IS_01 = 0x20, // must be 0 or 1
+  ARGS_FLAG_NONNEGATIVE = 0x40, // must be >= 0
   ARGS_FLAG_QUERYABLE = 0x80,
-  ARGS_MASK = 0x7F
+  ARGS_MASK = 0x0F
 };
 
 struct SerialCommandParseData {
@@ -526,37 +558,37 @@ struct SerialCommandParseData {
 // this table must be sorted in ASCII order, that is A-Z then a-z
 PROGMEM SerialCommandParseData commandParseData[] = {
   { 'A', ARGS_NONE },
-  { 'B', ARGS_INTEGER_INTEGER_FLOAT | ARGS_FLAG_QUERYABLE },
+  { 'B', ARGS_THREE_NUMBERS | ARGS_FLAG_FIRST_IS_01 },
   { 'C', ARGS_NONE },
-  { 'D', ARGS_FLOAT | ARGS_FLAG_QUERYABLE },
+  { 'D', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
   { 'E', ARGS_STRING },
   { 'I', ARGS_NONE },
-  { 'K', ARGS_INTEGER },
-  { 'L', ARGS_FLOAT_FLOAT | ARGS_FLAG_QUERYABLE },
-  { 'M', ARGS_INTEGER | ARGS_FLAG_QUERYABLE },
+  { 'K', ARGS_ONE_NUMBER },
+  { 'L', ARGS_TWO_NUMBERS | ARGS_FLAG_QUERYABLE },
+  { 'M', ARGS_ONE_NUMBER | ARGS_FLAG_FIRST_IS_01 | ARGS_FLAG_QUERYABLE },
   { 'N', ARGS_STRING | ARGS_FLAG_QUERYABLE },
-  { 'O', ARGS_FLOAT | ARGS_FLAG_QUERYABLE },
-  { 'P', ARGS_INTEGER_INTEGER_FLOAT },
+  { 'O', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
+  { 'P', ARGS_THREE_NUMBERS },
   { 'Q', ARGS_NONE },
-  { 'R', ARGS_INTEGER | ARGS_FLAG_QUERYABLE },
-  { 'S', ARGS_FLOAT | ARGS_FLAG_QUERYABLE },
+  { 'R', ARGS_ONE_NUMBER | ARGS_FLAG_FIRST_IS_01 | ARGS_FLAG_QUERYABLE },
+  { 'S', ARGS_ONE_NUMBER | ARGS_FLAG_QUERYABLE },
   { 'T', ARGS_NONE | ARGS_FLAG_QUERYABLE },
-  { 'V', ARGS_INTEGER },
+  { 'V', ARGS_ONE_NUMBER | ARGS_FLAG_PROFILE_NUMBER },
   { 'X', ARGS_NONE },
-  { 'a', ARGS_FLOAT_FLOAT_INTEGER },
-  { 'b', ARGS_INTEGER_INTEGER_INTEGER | ARGS_FLAG_QUERYABLE },
-  { 'c', ARGS_INTEGER | ARGS_FLAG_QUERYABLE },
-  { 'e', ARGS_INTEGER },
-  { 'i', ARGS_FLOAT | ARGS_FLAG_QUERYABLE },
-  { 'k', ARGS_INTEGER_INTEGER },
-  { 'l', ARGS_INTEGER | ARGS_FLAG_QUERYABLE },
+  { 'a', ARGS_THREE_NUMBERS },
+  { 'b', ARGS_TWO_NUMBERS | ARGS_FLAG_FIRST_IS_01 },
+  { 'c', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
+  { 'e', ARGS_ONE_NUMBER | ARGS_FLAG_PROFILE_NUMBER },
+  { 'i', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
+  { 'k', ARGS_TWO_NUMBERS },
+  { 'l', ARGS_ONE_NUMBER | ARGS_FLAG_FIRST_IS_01 | ARGS_FLAG_QUERYABLE },
   { 'n', ARGS_STRING },
-  { 'o', ARGS_INTEGER | ARGS_FLAG_QUERYABLE },
-  { 'p', ARGS_FLOAT | ARGS_FLAG_QUERYABLE },
-  { 'r', ARGS_INTEGER },
-  { 's', ARGS_INTEGER | ARGS_FLAG_QUERYABLE },
-  { 't', ARGS_INTEGER | ARGS_FLAG_QUERYABLE },
-  { 'x', ARGS_INTEGER }
+  { 'o', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
+  { 'p', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
+  { 'r', ARGS_ONE_NUMBER },
+  { 's', ARGS_ONE_NUMBER | ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_QUERYABLE },
+  { 't', ARGS_ONE_NUMBER | ARGS_FLAG_FIRST_IS_01 | ARGS_FLAG_QUERYABLE },
+  { 'x', ARGS_ONE_NUMBER | ARGS_FLAG_PROFILE_NUMBER }
 };
 
 // perform a binary search for the argument descriptor of the given mnemonic
@@ -593,8 +625,8 @@ static byte argsForMnemonic(char mnemonic)
 static void processSerialCommand()
 {
   const char *p = &serialCommandBuffer[1], *p2;
-  double f1, f2;
   long i1, i2, i3;
+  byte d1, d2, d3;
   byte argDescriptor;
 
   if (serialCommandBuffer[--serialCommandLength] != '\n')
@@ -622,10 +654,10 @@ static void processSerialCommand()
       serialPrintln(pgm_read_dword_near(&serialSpeedTable[serialSpeed]));
       break;
     case 'D':
-      serialPrintln(kd);
+      serialPrintln(theLoop.DGain);
       break;
     case 'i':
-      serialPrintln(ki);
+      serialPrintln(theLoop.IGain);
       break;
     case 'L':
       serialPrintln(lowerTripLimit);
@@ -635,7 +667,7 @@ static void processSerialCommand()
       serialPrintln(tripLimitsEnabled);
       break;
     case 'M':
-      serialPrintln(modeIndex);
+      serialPrintln(int(manualControl));
       break;
     case 'N':
       Serial.print(controllerName);
@@ -648,13 +680,13 @@ static void processSerialCommand()
       serialPrintln(powerOnBehavior);
       break;
     case 'p':
-      serialPrintln(kp);
+      serialPrintln(theLoop.PGain);
       break;
     case 'R':
-      serialPrintln(ctrlDirection);
+      serialPrintln(int(theLoop.invertAction));
       break;
     case 'S':
-      serialPrintln(setpoint);
+      serialPrintln(activeSetPoint);
       break;
     case 's':
       serialPrintln(setpointIndex);
@@ -671,8 +703,6 @@ static void processSerialCommand()
     goto out_OK;
   }
 
-  argDescriptor &= ARGS_MASK;
-
 #define CHECK_SPACE()                                   \
   if ((*p++) != ' ')                                    \
     goto out_EINV;                                      \
@@ -687,49 +717,24 @@ static void processSerialCommand()
   else do { } while (0)
 
   // not a query, so parse it against the argDescriptor
-  switch (argDescriptor)
+  switch (argDescriptor & ARGS_MASK)
   {
   case ARGS_NONE:
     CHECK_CMD_END();
     break;
-  case ARGS_INTEGER_INTEGER_INTEGER: // i1, i2, i3
-  case ARGS_INTEGER_INTEGER_FLOAT: // i1, i2, f1
+  case ARGS_THREE_NUMBERS: // i3, i2, i1
     CHECK_SPACE();
-    p2 = parseInt(p, &i1);
+    p2 = parseDecimal(p, &i3, &d3);
     CHECK_P2();
     // fall through
-  case ARGS_INTEGER_INTEGER: // i2, i3
+  case ARGS_TWO_NUMBERS: // i2, i1
     CHECK_SPACE();
-    p2 = parseInt(p, &i2);
+    p2 = parseDecimal(p, &i2, &d2);
     CHECK_P2();
     // fall through
-  case ARGS_INTEGER: // i3
+  case ARGS_ONE_NUMBER: // i1
     CHECK_SPACE();
-    if (argDescriptor == ARGS_INTEGER_INTEGER_FLOAT)
-      p2 = parseFloat(p, &f1);
-    else
-      p2 = parseInt(p, &i3);
-    CHECK_P2();
-    CHECK_CMD_END();
-    break;
-  case ARGS_FLOAT_FLOAT: // f2, f1
-    CHECK_SPACE();
-    p2 = parseFloat(p, &f2);
-  case ARGS_FLOAT: // f1
-    CHECK_SPACE();
-    p2 = parseFloat(p, &f1);
-    CHECK_P2();
-    CHECK_CMD_END();
-    break;
-  case ARGS_FLOAT_FLOAT_INTEGER: // f1, f2, i3
-    CHECK_SPACE();
-    p2 = parseFloat(p, &f1);
-    CHECK_P2();
-    CHECK_SPACE();
-    p2 = parseFloat(p, &f2);
-    CHECK_P2();
-    CHECK_SPACE();
-    p2 = parseInt(p, &i3);
+    p2 = parseDecimal(p, &i1, &d1);
     CHECK_P2();
     CHECK_CMD_END();
     break;
@@ -746,6 +751,19 @@ static void processSerialCommand()
     BUGCHECK();
   }
 
+  // perform bounds checking
+  if (argDescriptor & (ARGS_FLAG_NONNEGATIVE | ARGS_FLAG_PROFILE_NUMBER | ARGS_FLAG_FIRST_IS_01))
+  {
+    if (i1 < 0)
+      goto out_EINV;
+  }
+
+  if ((argDescriptor & ARGS_FLAG_PROFILE_NUMBER) && i1 >= NR_PROFILES)
+    goto out_EINV;
+
+  if ((argDescriptor & ARGS_FLAG_FIRST_IS_01) && i1 > 1)
+    goto out_EINV;
+
 #undef CHECK_CMD_END
 #undef CHECK_SPACE
 #undef CHECK_P2
@@ -761,10 +779,51 @@ static void processSerialCommand()
     startAutoTune();
     goto out_OK; // no EEPROM writeback needed
   case 'a': // set the auto-tune parameters
-    aTuneStep = f1;
-    aTuneNoise = f2;
-    aTuneLookBack = i3;
+    aTuneStep = makeDecimal<1>(i3, d3);
+    aTuneNoise = makeDecimal<1>(i2, d2);
+    aTuneLookBack = i1;
     break;
+  case 'B': // set peripheral card parameter
+    {
+      byte decimals;
+
+      if (i3 == 0)
+      {
+        if (!theInputCard.describeSetting(i2, &decimals))
+          goto out_EINV;
+        if (!theInputCard.writeSetting(i2, coerceToDecimal(i1, d1, decimals)))
+          goto out_EINV;
+      }
+      else
+      {
+        if (!theOutputCard.describeSetting(i2, &decimals))
+          goto out_EINV;
+        if (!theOutputCard.writeSetting(i2, coerceToDecimal(i1, d1, decimals)))
+          goto out_EINV;
+      }
+    }
+    break;
+  case 'b': // get peripheral card parameter
+    {
+      byte decimals;
+      int val;
+
+      if (i2 == 0)
+      {
+        if (!theInputCard.describeSetting(i1, &decimals))
+          goto out_EINV;
+        val = theInputCard.readSetting(i1);
+      }
+      else
+      {
+        if (!theOutputCard.describeSetting(i1, &decimals))
+          goto out_EINV;
+        val = theOutputCard.readSetting(i1);
+      }
+
+      serialPrintDecimal(val, decimals);
+    }
+    goto out_OK;
   case 'C': // cancel an auto-tune or profile execution
     if (tuning)
       stopAutoTune();
@@ -774,64 +833,61 @@ static void processSerialCommand()
       goto out_EMOD;
     goto out_OK; // no EEPROM writeback needed
   case 'c': // set the comm speed
-    if (cmdSetSerialSpeed(i3)) // since this resets the interface, just return
+    if (cmdSetSerialSpeed(i1)) // since this resets the interface, just return
       return;
     goto out_EINV;
   case 'D': // set the D gain
-    BOUNDS_CHECK(f1, 0, 99.99);
     if (tuning)
       goto out_EMOD;
-    kd = f1;
+    if (!trySetGain(&theLoop.DGain, i1, d1))
+      goto out_EINV;
     break;
   case 'E': // execute a profile by name
     if (!cmdStartProfile(p))
       goto out_EINV;
     goto out_OK; // no EEPROM writeback needed
   case 'e': // execute a profile by number
-    BOUNDS_CHECK(i3, 0, NR_PROFILES-1);
-
-    if (tuning || runningProfile || modeIndex != AUTOMATIC)
+    if (tuning || runningProfile || manualControl)
       goto out_EMOD;
 
-    activeProfileIndex = i3;
+    activeProfileIndex = i1;
     startProfile();
     goto out_OK; // no EEPROM writeback needed
   case 'I': // identify
     cmdIdentify();
     goto out_OK; // no EEPROM writeback needed
   case 'i': // set the I gain
-    BOUNDS_CHECK(f1, 0, 99.99);
-
     if (tuning)
       goto out_EMOD;
-    ki = f1;
+    if (!trySetGain(&theLoop.IGain, i1, d1))
+      goto out_EINV;
     break;
   case 'K': // memory peek
-    cmdPeek(i3);
+    cmdPeek(i1);
     goto out_OK; // no EEPROM writeback needed
   case 'k': // memory poke
-    BOUNDS_CHECK(i3, 0, 255);
+    BOUNDS_CHECK(i1, 0, 255);
 
-    cmdPoke(i2, i3);
+    cmdPoke(i2, i1);
     goto out_OK; // no EEPROM writeback needed
   case 'L': // set trip limits
-    BOUNDS_CHECK(f2, -999.9, 999.9);
-    BOUNDS_CHECK(f1, -999.9, 999.9);
+    {
+      ospDecimalValue<1> lower = makeDecimal<1>(i2, d2);
+      ospDecimalValue<1> upper = makeDecimal<1>(i1, d1);
+      BOUNDS_CHECK(lower, makeDecimal<1>(-9999), makeDecimal<1>(9999));
+      BOUNDS_CHECK(upper, makeDecimal<1>(-9999), makeDecimal<1>(9999));
 
-    lowerTripLimit = f2;
-    upperTripLimit = f1;
+      lowerTripLimit = lower;
+      upperTripLimit = upper;
+    }
     break;
   case 'l': // set limit trip enabled
-    BOUNDS_CHECK(i3, 0, 1);
-    tripLimitsEnabled = i3;
+    tripLimitsEnabled = i1;
     break;
   case 'M': // set the controller mode (PID or manual)
-    BOUNDS_CHECK(i3, 0, 1);
-
-    modeIndex = i3;
-    if (modeIndex == MANUAL)
+    manualControl = !!i1;
+    if (manualControl)
       output = manualOutput;
-    myPID.SetMode(i3);
     break;
   case 'N': // set the unit name
     if (strlen(p) > 16)
@@ -848,40 +904,41 @@ static void processSerialCommand()
     strcpy(profileBuffer.name, p);
     break;
   case 'O': // directly set the output command
-    BOUNDS_CHECK(f1, 0, 100);
+    {
+      ospDecimalValue<1> o = makeDecimal<1>(i1, d1);
+      if (o > makeDecimal<1>(1000))
+        goto out_EINV;
 
-    if (tuning || runningProfile || modeIndex != MANUAL)
-      goto out_EMOD;
+      if (tuning || runningProfile || !manualControl)
+        goto out_EMOD;
 
-    output = f1;
+      manualOutput = o;
+      output = o;
+    }
     break;
   case 'o': // set power-on behavior
-    BOUNDS_CHECK(i3, 0, 2);
-
-    powerOnBehavior = i3;
+    if (i1 > 2)
+      goto out_EINV;
+    powerOnBehavior = i1;
     break;
   case 'P': // define a profile step
-    if (!profileBuffer.addStep(i1, i2, f1))
+    if (!profileBuffer.addStep(i3, i2, makeDecimal<1>(i1, d1)))
       goto out_EINV;
     break;
   case 'p': // set the P gain
-    BOUNDS_CHECK(f1, 0, 99.99);
-
     if (tuning)
       goto out_EMOD;
-    kp = f1;
+    if (!trySetGain(&theLoop.PGain, i1, d1))
+      goto out_EINV;
     break;
   case 'Q': // query current status
     cmdQuery();
     goto out_OK; // no EEPROM writeback needed
   case 'R': // set the controller action direction
-    BOUNDS_CHECK(i3, 0, 1);
-
-    ctrlDirection = i3;
-    myPID.SetControllerDirection(i3);
+    theLoop.invertAction = !!i1;
     break;
   case 'r': // reset memory
-    if (i3 != -999)
+    if (i1 != -999)
       goto out_EINV;
 
     clearEEPROM();
@@ -889,19 +946,23 @@ static void processSerialCommand()
     Serial.println(F("Reset the unit to complete."));
     goto out_OK; // no EEPROM writeback needed or wanted!
   case 'S': // change the setpoint
-    BOUNDS_CHECK(f1, -999.9, 999.9);
+    {
+      ospDecimalValue<1> sp = makeDecimal<1>(i1, d1);
+      BOUNDS_CHECK(sp, makeDecimal<1>(-9999), makeDecimal<1>(9999));
 
-    if (tuning)
-      goto out_EMOD;
+      if (tuning)
+        goto out_EMOD;
 
-    setPoints[setpointIndex] = f1;
-    setpoint = f1;
+      setPoints[setpointIndex] = sp;
+      activeSetPoint = sp;
+    }
     break;
   case 's': // change the active setpoint
-    BOUNDS_CHECK(i3, 0, 3);
+    if (i1 >= 4)
+      goto out_EINV;
 
-    setpointIndex = i3;
-    setpoint = setPoints[setpointIndex];
+    setpointIndex = i1;
+    activeSetPoint = setPoints[setpointIndex];
     break;
   case 'T': // clear a trip
     if (!tripped)
@@ -909,21 +970,16 @@ static void processSerialCommand()
     tripped = false;
     goto out_OK; // no EEPROM writeback needed
   case 't': // set trip auto-reset
-    BOUNDS_CHECK(i3, 0, 1);
-    tripAutoReset = i3;
+    tripAutoReset = i1;
     break;
   case 'V': // save the profile buffer to EEPROM
-    BOUNDS_CHECK(i3, 0, 2);
-
-    saveEEPROMProfile(i3);
+    saveEEPROMProfile(i1);
     goto out_OK; // no EEPROM writeback needed
   case 'X': // examine: dump the controller settings
     cmdExamineSettings();
     goto out_OK; // no EEPROM writeback needed
   case 'x': // examine a profile: dump a description of the give profile
-    BOUNDS_CHECK(i3, 0, 2);
-
-    cmdExamineProfile(i3);
+    cmdExamineProfile(i1);
     goto out_OK; // no EEPROM writeback needed
   default:
     goto out_EINV;
