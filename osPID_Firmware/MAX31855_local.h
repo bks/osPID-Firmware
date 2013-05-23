@@ -16,7 +16,7 @@ template<int D> struct ospDecimalValue;
 class MAX31855
 {
 public:
-  MAX31855(unsigned char SO, unsigned	char CS, unsigned char SCK);
+  MAX31855(unsigned char SCK, unsigned	char CS, unsigned char SO);
 
   ospDecimalValue<1> readThermocoupleCelsius();
   ospDecimalValue<2> readJunctionCelsius();

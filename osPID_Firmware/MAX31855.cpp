@@ -22,7 +22,7 @@
 #include "MAX31855_local.h"
 #include "ospDecimalValue.h"
 
-MAX31855::MAX31855(unsigned char SO, unsigned char CS, unsigned char SCK)
+MAX31855::MAX31855(unsigned char SCK, unsigned char CS, unsigned char SO)
 {
   so = SO;
   cs = CS;

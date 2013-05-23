@@ -151,7 +151,7 @@ template<> const char *ospTemperatureInputCard<MAX6675>::cardIdentifier() {
 
 template<> ospDecimalValue<1> ospTemperatureInputCard<MAX31855>::readThermocouple() {
    ospDecimalValue<1> val = thermocouple.readThermocoupleCelsius();
- 
+
    if (val == makeDecimal<1>(FAULT_OPEN) || val == makeDecimal<1>(FAULT_SHORT_GND) || val == makeDecimal<1>(FAULT_SHORT_VCC))
      val = makeDecimal<1>(-10000);
 
