@@ -283,7 +283,7 @@ static void drawMenu()
 // the start of the buffer and the return value are left unchanged.
 static char *formatDecimalValue(char buffer[7], int num, byte decimals)
 {
-  byte decimalPos = (decimals == 0) ? 255 : 5 - decimals;
+  byte decimalPos = (decimals == 0) ? 6 : 5 - decimals;
   bool isNegative = (num < 0);
   num = abs(num);
 
