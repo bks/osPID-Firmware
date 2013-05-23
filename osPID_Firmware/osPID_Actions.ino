@@ -43,8 +43,8 @@ static void startAutoTune()
   wasManualControl = manualControl;
   manualControl = true;
 
-  autoTuner.SetNoiseBand(double(aTuneNoise));
-  autoTuner.SetOutputStep(double(aTuneStep));
+  autoTuner.SetNoiseBand(aTuneNoise);
+  autoTuner.SetOutputStep(aTuneStep);
   autoTuner.SetLookbackSec(aTuneLookBack);
   tuning = true;
 }

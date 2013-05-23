@@ -130,8 +130,7 @@ ospDecimalValue<1> aTuneStep = { 200 }, aTuneNoise = { 10 };
 int aTuneLookBack = 10;
 
 // some variable for the autotuner
-double autotunerInput, autotunerCommand;
-PID_ATune autoTuner(&autotunerInput, &autotunerCommand);
+PID_ATune autoTuner(&lastGoodInput, &output);
 
 // whether the autotuner is active
 bool tuning = false;
@@ -386,9 +385,7 @@ void loop()
 
   if (tuning)
   {
-    autotunerInput = (lastGoodInput / 10.0);
     byte val = autoTuner.Runtime();
-    output = makeDecimal<1>(int(autotunerCommand * 10.0));
 
     if (val != 0)
     {

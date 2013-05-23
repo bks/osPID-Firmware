@@ -92,7 +92,7 @@ public:
   // default constructor, copy constructor, and operator= are all trivial, since
   // this must remain a POD class
 
-  operator double() const
+  double toDouble() const
   {
     return value / double(SCALE);
   }
@@ -118,9 +118,13 @@ public:
   // basic arithmetic operators
 
   // negation, addition, and subtraction all have no effect on the precision
-  ospDecimalValue operator - () { ospDecimalValue v(*this); v.value = -v.value; return v; }
+  ospDecimalValue operator - () const { ospDecimalValue v(*this); v.value = -v.value; return v; }
   ospDecimalValue& operator += (const ospDecimalValue& that) { value += that.value; return *this; }
   ospDecimalValue& operator -= (const ospDecimalValue& that) { value -= that.value; return *this; }
+
+  // nor do multiplication or division by an integer
+  ospDecimalValue& operator *= (int m) { value *= m; return *this; }
+  ospDecimalValue& operator /= (int m) { value /= m; return *this; }
 
   // but multiplication and division require care to maintain precisions
   template<int lDEC, int rDEC> friend ospDecimalMultiplyResult<lDEC+rDEC> operator * (const ospDecimalValue<lDEC>& lhs, const ospDecimalValue<rDEC>& rhs);
@@ -162,6 +166,10 @@ public:
   { ospDecimalValue res(lhs); res += rhs; return res; }
   friend ospDecimalValue operator - (const ospDecimalValue& lhs, const ospDecimalValue& rhs)
   { ospDecimalValue res(lhs); res -= rhs; return res; }
+  friend ospDecimalValue operator * (const ospDecimalValue& lhs, int rhs)
+  { ospDecimalValue res(lhs); res *= rhs; return res; }
+  friend ospDecimalValue operator / (const ospDecimalValue& lhs, int rhs)
+  { ospDecimalValue res(lhs); res /= rhs; return res; }
 
   // derived logical operators
   template<int lDEC, int rDEC> friend bool operator != (const ospDecimalValue<lDEC>& lhs, const ospDecimalValue<rDEC>& rhs);
@@ -264,6 +272,14 @@ template<int lDEC, int rDEC> inline bool operator >= (const ospDecimalValue<lDEC
 template<int D> inline ospDecimalValue<D> makeDecimal(int val)
 {
   return (ospDecimalValue<D>) { val };
+}
+
+#undef abs
+template<int D> inline ospDecimalValue<D> abs(const ospDecimalValue<D>& val)
+{
+  if (val < makeDecimal<D>(0))
+    return -val;
+  return val;
 }
 
 #endif

@@ -53,12 +53,12 @@ private:
   // convert the thermistor voltage to a temperature
   ospDecimalValue<1> thermistorVoltageToTemperature(int voltage)
   {
-    double R = referenceResistorOhms / (1024.0/(double)voltage - 1);
+    double R = referenceResistorOhms.toDouble() / (1024.0/(double)voltage - 1);
     double steinhart;
-    steinhart = R / thermistorNominalOhms;     // (R/Ro)
+    steinhart = R / thermistorNominalOhms.toDouble();     // (R/Ro)
     steinhart = log(steinhart);                  // ln(R/Ro)
-    steinhart /= BCoefficient;                   // 1/B * ln(R/Ro)
-    steinhart += 1.0 / (thermistorReferenceTemperatureCelsius + 273.15); // + (1/To)
+    steinhart /= BCoefficient.toDouble();                   // 1/B * ln(R/Ro)
+    steinhart += 1.0 / (thermistorReferenceTemperatureCelsius.toDouble() + 273.15); // + (1/To)
     steinhart = 1.0 / steinhart;                 // Invert
     steinhart -= 273.15;                         // convert to C
 

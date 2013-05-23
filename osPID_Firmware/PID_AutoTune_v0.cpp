@@ -37,16 +37,16 @@
 #endif
 
 #include "PID_AutoTune_v0_local.h" //renamed to avoid conflict if Autotune library is installed on IDE
+#include "ospDecimalValue.h"
 
-
-PID_ATune::PID_ATune(double* Input, double* Output)
+PID_ATune::PID_ATune(ospDecimalValue<1>* Input, ospDecimalValue<1>* Output)
 {
 	input = Input;
 	output = Output;
 	controlType =0 ; //default to PI
-	noiseBand = 0.5;
+	noiseBand = makeDecimal<1>(5);
 	running = false;
-	oStep = 30;
+	oStep = makeDecimal<1>(300);
 	SetLookbackSec(10);
 	lastTime = millis();
 	
@@ -72,7 +72,7 @@ int PID_ATune::Runtime()
 	
 	if((now-lastTime)<(unsigned long)sampleTime) return false;
 	lastTime = now;
-	double refVal = *input;
+	ospDecimalValue<1> refVal = *input;
 	justevaled=true;
 	if(!running)
 	{ //initialize working variables the first time around
@@ -104,7 +104,7 @@ int PID_ATune::Runtime()
   //id peaks
   for(int i=nLookBack-1;i>=0;i--)
   {
-    double val = lastInputs[i];
+    ospDecimalValue<1> val = lastInputs[i];
     if(isMax) isMax = refVal>val;
     if(isMin) isMin = refVal<val;
     lastInputs[i+1] = lastInputs[i];
@@ -144,8 +144,8 @@ int PID_ATune::Runtime()
   
   if(justchanged && peakCount>2)
   { //we've transitioned.  check if we can autotune based on the last peaks
-    double avgSeparation = (abs(peaks[peakCount-1]-peaks[peakCount-2])+abs(peaks[peakCount-2]-peaks[peakCount-3]))/2;
-    if( avgSeparation < 0.05*(absMax-absMin))
+    ospDecimalValue<1> avgSeparation = (abs(peaks[peakCount-1]-peaks[peakCount-2])+abs(peaks[peakCount-2]-peaks[peakCount-3]))/2;
+    if( avgSeparation < (absMax-absMin)/20)
     {
 		FinishUp();
       running = false;
@@ -160,7 +160,7 @@ void PID_ATune::FinishUp()
 {
 	  *output = outputStart;
       //we can generate tuning parameters!
-      Ku = 4*oStep/((absMax-absMin)*3.14159);
+      Ku = (oStep * 4).toDouble()/((absMax-absMin).toDouble()*3.14159);
       Pu = (double)(peak1-peak2) * 0.001;
 }
 
@@ -179,12 +179,12 @@ double PID_ATune::GetKd()
 	return controlType==1? 0.075 * Ku * Pu : 0;  //Kd = Kc * Td
 }
 
-void PID_ATune::SetOutputStep(double Step)
+void PID_ATune::SetOutputStep(ospDecimalValue<1> Step)
 {
 	oStep = Step;
 }
 
-double PID_ATune::GetOutputStep()
+ospDecimalValue<1> PID_ATune::GetOutputStep()
 {
 	return oStep;
 }
@@ -198,12 +198,12 @@ int PID_ATune::GetControlType()
 	return controlType;
 }
 	
-void PID_ATune::SetNoiseBand(double Band)
+void PID_ATune::SetNoiseBand(ospDecimalValue<1> Band)
 {
 	noiseBand = Band;
 }
 
-double PID_ATune::GetNoiseBand()
+ospDecimalValue<1> PID_ATune::GetNoiseBand()
 {
 	return noiseBand;
 }
