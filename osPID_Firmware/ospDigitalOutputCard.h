@@ -10,7 +10,7 @@ private:
   enum { OUTPUT_RELAY = 0, OUTPUT_SSR = 1 };
 
   byte outputType;
-  int outputWindowMilliseconds;
+  unsigned int outputWindowMilliseconds;
 
 public:
   ospDigitalOutputCard() 
@@ -79,7 +79,7 @@ public:
     // since |percent| is effectively integer thousandths, we can just
     // divide here to get the number of milliseconds that the output should
     // be ON
-    int oVal = long(outputWindowMilliseconds * percent.rawValue()) / 1000;
+    int oVal = long(outputWindowMilliseconds) * percent.rawValue() / 1000L;
 
     if (outputType == OUTPUT_RELAY)
       digitalWrite(RelayPin, (oVal>wind) ? HIGH : LOW);
