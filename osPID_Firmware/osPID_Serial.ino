@@ -456,7 +456,7 @@ static void cmdExamineSettings()
     serialPrint(i);
     serialPrint(F(": "));
     byte decimals;
-    const char *description = theInputCard.describeSetting(i, &decimals);
+    const __FlashStringHelper *description = theInputCard.describeSetting(i, &decimals);
     serialPrint(description);
     serialPrint(F(" = "));
     serialPrintDecimal(theInputCard.readSetting(i), decimals);
@@ -471,7 +471,7 @@ static void cmdExamineSettings()
     serialPrint(i);
     serialPrint(F(": "));
     byte decimals;
-    const char *description = theOutputCard.describeSetting(i, &decimals);
+    const __FlashStringHelper *description = theOutputCard.describeSetting(i, &decimals);
     serialPrint(description);
     serialPrint(F(" = "));
     serialPrintDecimal(theOutputCard.readSetting(i), decimals);

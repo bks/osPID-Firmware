@@ -32,7 +32,7 @@ public:
     pinMode(SSRPin, OUTPUT);
   }
 
-  const char *cardIdentifier() { return PSTR("OUT_DIGITAL"); }
+  const __FlashStringHelper *cardIdentifier() { return F("OUT_DIGITAL"); }
 
   // how many settings does this card have
   byte settingsCount() { return 2; }
@@ -65,14 +65,14 @@ public:
   }
 
   // describe the available settings
-  const char *describeSetting(byte index, byte *decimals) {
+  const __FlashStringHelper *describeSetting(byte index, byte *decimals) {
     *decimals = 0;
     if (index == 0) {
-      return PSTR("Use RELAY (0) or SSR (1)");
+      return F("Use RELAY (0) or SSR (1)");
     } else if (index == 1) {
-      return PSTR("Output PWM window size in milliseconds");
+      return F("Output PWM window size in milliseconds");
     } else if (index == 2) {
-      return PSTR("Minimum time between PWM edges in milliseconds");
+      return F("Minimum time between PWM edges in milliseconds");
     } else
       return 0;
   }

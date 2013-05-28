@@ -44,7 +44,7 @@ public:
   void initialize() { }
 
   // return the card identifier
-  const char *cardIdentifier();
+  const __FlashStringHelper * cardIdentifier();
 
 private:
   // actually read the thermocouple
@@ -101,7 +101,7 @@ public:
   }
 
   // describe the card settings
-  const char * describeSetting(byte index, byte *decimals) {
+  const __FlashStringHelper * describeSetting(byte index, byte *decimals) {
     if (index < 3)
       *decimals = 0;
     else
@@ -109,15 +109,15 @@ public:
 
     switch (index) {
     case 0:
-      return PSTR("Use the THERMOCOUPLE (0) or THERMISTOR (1) reader");
+      return F("Use the THERMOCOUPLE (0) or THERMISTOR (1) reader");
     case 1:
-      return PSTR("The thermistor nominal resistance (ohms)");
+      return F("The thermistor nominal resistance (ohms)");
     case 2:
-      return PSTR("The reference resistor value (ohms)");
+      return F("The reference resistor value (ohms)");
     case 3:
-      return PSTR("The thermistor B coefficient");
+      return F("The thermistor B coefficient");
     case 4:
-      return PSTR("The thermistor reference temperature (Celsius)");
+      return F("The thermistor reference temperature (Celsius)");
     default:
       return 0;
     }
@@ -145,8 +145,8 @@ template<> ospDecimalValue<1> ospTemperatureInputCard<MAX6675>::readThermocouple
   return thermocouple.readCelsius();
 }
 
-template<> const char *ospTemperatureInputCard<MAX6675>::cardIdentifier() {
-  return PSTR("IN_TEMP_V1.10");
+template<> const __FlashStringHelper * ospTemperatureInputCard<MAX6675>::cardIdentifier() {
+  return F("IN_TEMP_V1.10");
 }
 
 template<> ospDecimalValue<1> ospTemperatureInputCard<MAX31855>::readThermocouple() {
@@ -158,8 +158,8 @@ template<> ospDecimalValue<1> ospTemperatureInputCard<MAX31855>::readThermocoupl
    return val;
 }
 
-template<> const char *ospTemperatureInputCard<MAX31855>::cardIdentifier() {
-  return PSTR("IN_TEMP_V1.20");
+template<> const __FlashStringHelper * ospTemperatureInputCard<MAX31855>::cardIdentifier() {
+  return F("IN_TEMP_V1.20");
 }
 
 typedef ospTemperatureInputCard<MAX6675> ospTemperatureInputCardV1_10;

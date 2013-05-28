@@ -14,7 +14,7 @@ public:
   void initialize() { }
 
   // return an identifying name for this card, as a PSTR
-  const char *cardIdentifier() { return ""; }
+  const __FlashStringHelper *cardIdentifier() { return F(""); }
 
   // how many settings does this card have
   byte settingsCount() const { return 0; }
@@ -27,7 +27,7 @@ public:
 
   // return a text description of the N'th setting, as a PSTR
   // also returns the number of decimal places
-  const char *describeSetting(byte index, byte *decimals) { *decimals = 0; return 0; }
+  const __FlashStringHelper *describeSetting(byte index, byte *decimals) { *decimals = 0; return 0; }
 
   // save and restore settings to/from EEPROM using the settings helper
   void saveSettings(ospSettingsHelper& settings) { }
